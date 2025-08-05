@@ -3,7 +3,6 @@ import math
 from multiprocessing import Pool
 import Channel_functions as channel
 
-# 変更加えてみたよ
 # 設定
 channel_type = "InH"
 NF_setting = "Near_3"
