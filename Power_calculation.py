@@ -5,7 +5,7 @@ import time
 
 # 設定
 channel_type = "InH"
-NF_setting = "Near_Unif"
+NF_setting = "Near"
 V = 12
 Q = 64
 lam = (3*1e8) / (142*1e9)
