@@ -376,20 +376,6 @@ def scatter1_distance(d, Q, V, N, M, rho, tau):
     r[0][0] = d
     return r, R
 
-# 散乱体１のxyz座標を決定
-
-# 旧バージョン
-# def scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad):
-#     xyz_coordinates = np.zeros((N, max(M), 3))  # [n][m] の形で初期化
-#     for n in range(N):
-#         for m in range(M[n]):
-#             x = r[n][m] * np.cos(theta_rad[n][m]) * np.cos(phi_rad[n][m])
-#             y = r[n][m] * np.cos(theta_rad[n][m]) * np.sin(phi_rad[n][m])
-#             z = r[n][m] * np.sin(theta_rad[n][m])
-#             xyz_coordinates[n, m] = [x, y, z]  # x, y, z を1つの配列にまとめて格納
-                
-#     return xyz_coordinates
-
 # 新バージョン
 def scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad):
     max_M = max(M)

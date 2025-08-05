@@ -2,10 +2,11 @@ import numpy as np
 import math
 from multiprocessing import Pool
 import Channel_functions as channel
+import os
 
 # 設定
-channel_type = "InH"
-NF_setting = "Near_3"
+channel_type = "InH_Mirror"
+NF_setting = "Near"
 d=5
 
 # 必要なパラメータ設定
@@ -20,6 +21,11 @@ V = 12
 # ベースのチャネル情報を取得
 Base = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/{channel_type}/Base.npy", allow_pickle=True)
 
+def distance_from_mirrorUE(d, tau, rho, N, M):
+    R = [np.zeros(M[i]) for i in range(N)]
+    for n in range(N):
+        for m in range(M[n]):
+            R[n][m] = d + 0.3*(tau[n] + rho[n][m])
 
 def process_single_link(channel_base,channel_type,d):
     L_AOD = channel_base['L_AOD']
@@ -60,10 +66,10 @@ def process_single_link(channel_base,channel_type,d):
     P_each_career = channel.cluster_Power_each_career(Pr_each_career, Z, N, tau, channel_type)
     Pi_each_career = channel.SP_Power_each_career(N, M, P_each_career, rho, U, channel_type)
     r_dash = lam * (Q + 1) * V / (6 * math.sqrt(3))
-    r, R = channel.scatter1_distance(d, Q, V, N, M, rho, tau)
+    R = distance_from_mirrorUE(d, tau, rho, N, M)
     phi_rad = [np.radians(phi_deg[n]) for n in range(N)]
     theta_rad = [np.radians(theta_deg[n]) for n in range(N)]
-    sca1_xyz_co = channel.scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad)
+    sca1_xyz_co = channel.scatter1_xyz_cordinate(N, M, R, phi_rad, theta_rad)
     subarray_v_qy_qz = channel.calc_anntena_xyz(lam, V, Q)
     dis_sca1_to_anntena = channel.distance_scatter1_to_eachanntena(sca1_xyz_co, subarray_v_qy_qz, N, M, V, Q)
 
@@ -74,11 +80,12 @@ def process_single_link(channel_base,channel_type,d):
         "phi_deg": phi_deg, "varphi_deg": varphi_deg, "theta_deg": theta_deg, "eta_deg": eta_deg,
         "Pr": Pr, "Pr_each_career": Pr_each_career, "t_nm": t_nm, "P": P, "Pi": Pi,
         "P_each_career": P_each_career, "Pi_each_career": Pi_each_career,
-        "r_dash": r_dash, "r": r, "R": R, "sca1_xyz_co": sca1_xyz_co,
+        "r_dash": r_dash, "R": R, "sca1_xyz_co": sca1_xyz_co,
         "subarray_v_qy_qz": subarray_v_qy_qz, "dis_sca1_to_anntena": dis_sca1_to_anntena
     }
 
 save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/{channel_type}/{NF_setting}/d={d}"
+os.makedirs(save_dir, exist_ok=True)
 if __name__ == '__main__':
     with Pool() as pool:
         args = [(channel_base, channel_type, d) for channel_base in Base.tolist()]
