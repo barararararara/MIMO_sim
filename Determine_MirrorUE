@@ -5,7 +5,7 @@ import Channel_functions as channel
 import os
 
 # 設定
-channel_type = "InH_Mirror"
+channel_type = "InH"
 NF_setting = "Near"
 d=5
 
@@ -17,6 +17,9 @@ g_dB = 0
 Q = 64
 V = 12
 
+# 距離リスト（設定値として抽出）
+distance_list = [5, 10, 15, 20, 25, 30]
+
 
 # ベースのチャネル情報を取得
 Base = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/{channel_type}/Base.npy", allow_pickle=True)
@@ -26,6 +29,7 @@ def distance_from_mirrorUE(d, tau, rho, N, M):
     for n in range(N):
         for m in range(M[n]):
             R[n][m] = d + 0.3*(tau[n] + rho[n][m])
+    return R
 
 def process_single_link(channel_base,channel_type,d):
     L_AOD = channel_base['L_AOD']
@@ -84,11 +88,10 @@ def process_single_link(channel_base,channel_type,d):
         "subarray_v_qy_qz": subarray_v_qy_qz, "dis_sca1_to_anntena": dis_sca1_to_anntena
     }
 
-
 if __name__ == '__main__':
-    for d in [5, 10, 15, 20, 25, 30]:
+    for d in distance_list:
         print(f"Processing distance: {d} meters")
-        save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/{channel_type}/{NF_setting}/d={d}"
+        save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/{NF_setting}/d={d}"
         os.makedirs(save_dir, exist_ok=True)
         with Pool() as pool:
             args = [(channel_base, channel_type, d)
