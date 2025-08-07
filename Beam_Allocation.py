@@ -78,7 +78,7 @@ f = np.linspace(141.50025*1e9, 142.49975*1e9, 2000) #2000個の周波数
 
 # 設定
 channel_type = "InH"
-NF_setting = "Near"
+NF_setting = "Far"
 # スレッショルド値
 threshold = -73
 # 割り当て数の最大

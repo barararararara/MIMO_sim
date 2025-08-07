@@ -43,7 +43,7 @@ def Channel_Matrix_Calculation(channel_type, d, NF_setting):
     h_tru_list = []
     h_est_list = []
     V = 12
-    channel_data = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}\{NF_setting}\d={d}\Scatter1.npy", allow_pickle=True)
+    channel_data = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
     
     load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Beamallocation/{NF_setting}"
     beam_allocation  = np.load(f'{load_dir}/d={d}.npy', allow_pickle=True)
@@ -230,7 +230,7 @@ W =12
 
 # 実行部分
 channel_type = 'InH'
-NF_setting = 'Near'
+NF_setting = 'Far'
 
 # シミュレーション実行
 for d in range(5,31,5):
