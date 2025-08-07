@@ -1,7 +1,6 @@
 import numpy as np
 import scipy.stats as st
 import matplotlib.pyplot as plt
-import math
 import Channel_functions as channel
 import os
 
@@ -11,7 +10,6 @@ P_noise_mW = 6.31*1e-12
 U=8
 d=5
 #####################################################################################################################
-# 関数地帯
 # グラム行列の固有値と固有ベクトルを求める関数
 def calc_eigval(H):
     H_H_H = np.conjugate(H).T @ H
@@ -63,7 +61,7 @@ def water_filling_ratio(eig_vals, Pt, P_noise, tol=1e-12):
 
 def generate_s(Ly):
     # 複素ガウス乱数の生成（実部と虚部を分散0.5で生成）
-    # こうすると、各エントリの平均パワーは 1 になる
+    # こうすると、各エントリの平均パワーは 1 
     s = (np.random.randn(Ly) + 1j * np.random.randn(Ly)) / np.sqrt(2)
     return s
 
@@ -135,41 +133,31 @@ def calc_channel_capacity(H, H_tru):
     # plt.show()
     return Capacity, eigvals_all
 
-
-
-
 ####################################################################################################################
 
-# チャネル容量とレイヤ数求める部分
-setting = 'InF'
-NorF = 'Far'
+# メインの処理
+# 設定
+channel_type = 'InH'
+NF_setting = 'Far'
+load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}/H_tru"
 
 for d in range(5, 31, 5):  # d = 5, 10, ..., 30
 
-    # load_dir = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{setting}_r=3/Channel_Matrix"
-    # load_dir = "C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_InF_1000/Channel_InF_1000_step4_ChannelMatrix"
-    # load_dir = "C:/Users/tai20/Downloads/NYUSIMchannel_shelter/InH_CoherentSum/InH_Simple_CoherentSum/ChannelMatrix"
-    # load_dir = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/InF_CoherentSum/InF_Simple_CoherentSum/ChannelMatrix"
-    # load_dir = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/InF_CoherentSum/InF_r=3/ChannelMatrix"
-    load_dir = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/{setting}_CoherentSum/{setting}_r=3/ChannelMatrix"
-    H_tru = np.load(f"{load_dir}/Channel_{setting}_1000_step4_Htru_{NorF}_d={d}.npy", allow_pickle=True)
-    H_est = np.load(f"{load_dir}/Channel_{setting}_1000_step4_Hmea_{NorF}_d={d}.npy", allow_pickle=True)
+    H_tru = np.load(f"{load_dir}/d={d}.npy", allow_pickle=True)
+    H_est = np.load(f"{load_dir}/d={d}.npy", allow_pickle=True)
     cap_tru, eigval_tru = calc_channel_capacity(H_tru, H_tru)
     cap_est, eigval_est = calc_channel_capacity(H_est, H_tru)
     
     # 保存パス
-    # base_path = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{setting}_r=3/ChannelCapacity/Channel_{setting}_step5_ChannelCapacity_d={d}"
-    # base_path = "C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_InF_1000/Channel_InF_1000_step5_ChannelCapacity"
-    # base_path = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/{setting}_CoherentSum/{setting}_Simple_CoherentSum/ChannelCapacity"
-    base_path = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/{setting}_CoherentSum/{setting}_r=3/ChannelCapacity_another"
+    save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Capacity/{NF_setting}"
     # ディレクトリがなければ作る
-    os.makedirs(base_path, exist_ok=True)
+    os.makedirs(save_dir, exist_ok=True)
 
     # # Capacityの保存
-    np.save(f"{base_path}/Channel_{setting}_step5_Htru_{NorF}_ChannelCapacity_d={d}", cap_tru)
-    np.save(f"{base_path}/Channel_{setting}_step5_Hmea_{NorF}_ChannelCapacity_d={d}", cap_est)
+    np.save(f"{save_dir}", cap_tru)
+    np.save(f"{save_dir}", cap_est)
 
     # 固有値の保存（リストのままだとnp.saveできないのでobject指定）
-    np.save(f"{base_path}/eigvals_{NorF}_Htru_{NorF}_d={d}.npy", eigval_tru, allow_pickle=True)
-    np.save(f"{base_path}/eigvals_{NorF}_Hmea_{NorF}_d={d}.npy", eigval_est, allow_pickle=True)
+    np.save(f"{save_dir}/eigvals_Htru_d={d}.npy", eigval_tru, allow_pickle=True)
+    np.save(f"{save_dir}/eigvals_Hest_d={d}.npy", eigval_est, allow_pickle=True)
     print(f'{d} has done')

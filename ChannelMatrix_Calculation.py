@@ -39,14 +39,14 @@ def transform_angle_to_numpy(phi_deg, theta_deg, varphi_deg, eta_deg, N, M):
     return phi_rad_tmp, theta_rad_tmp, varphi_rad_tmp, eta_rad_tmp
 
 # チャネル行列計算関数
-def Channel_Matrix_Calculation(setting, d, NorF):
+def Channel_Matrix_Calculation(channel_type, d, NF_setting):
     h_tru_list = []
-    h_mea_list = []
+    h_est_list = []
     V = 12
-    channel_data = np.load(f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{setting}_1000/Channel_{setting}_1000_step1_IncludeScatter1/Channel_{setting}_1000_step1_d={d}.npy", allow_pickle=True)
+    channel_data = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}\{NF_setting}\d={d}\Scatter1.npy", allow_pickle=True)
     
-    load_dir = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_InF_1000/Channel_InF_1000_step3_BeamAllocation"
-    beam_allocation  = np.load(f'{load_dir}/Channel_{setting}_step3_BeamAllocation_{NorF}_d={d}.npy', allow_pickle=True)
+    load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Beamallocation/{NF_setting}"
+    beam_allocation  = np.load(f'{load_dir}/d={d}.npy', allow_pickle=True)
     
     # サブアレーの各素子の座標を計算
     subarray_coordinates_v_qy_qz = np.load('C:/Users/tai20/Downloads/NYUSIMchannel_shelter/subarray_coordinates_Q64.npy')
@@ -55,37 +55,22 @@ def Channel_Matrix_Calculation(setting, d, NorF):
     for Channel_number in range(1000):
         N = channel_data[Channel_number]["N"]
         M = channel_data[Channel_number]["M"]
-        rho = channel_data[Channel_number]["rho"]
-        tau = channel_data[Channel_number]["tau"]
         phi_deg = channel_data[Channel_number]["phi_deg"]
         theta_deg = channel_data[Channel_number]["theta_deg"]
         eta_deg = channel_data[Channel_number]["eta_deg"]
         varphi_deg = channel_data[Channel_number]["varphi_deg"]
-        Pi_each_career = channel_data[Channel_number]["Pi_each_career"]
         Pi = channel_data[Channel_number]["Pi"]
         beta = channel_data[Channel_number]["beta"]
         t_nm = channel_data[Channel_number]["t_nm"]
-        Pr = channel_data[Channel_number]["Pr"]
-        r = channel_data[Channel_number]["r"]
+        R = channel_data[Channel_number]["R"]
         dis_sca1_to_anntena = channel_data[Channel_number]["dis_sca1_to_anntena"]
-        sca1_xyz_co = channel_data[Channel_number]["sca1_xyz_co"]
-        # ################################################
-        # # 散乱体の位置固定ゾーン
-        # for n in range(N):
-        #     for m in range(M[n]):
-        #         r[n][m] = 3
-                
+        
         phi_rad, theta_rad, varphi_rad, eta_rad = transform_angle_to_numpy(phi_deg, theta_deg, varphi_deg, eta_deg, N, M)
-        # sca1_xyz_co = channel.scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad)
-        # subarray_v_qy_qz = channel.calc_anntena_xyz(3/1420, V, Q)
-        # dis_sca1_to_anntena = channel.distance_scatter1_to_eachanntena(sca1_xyz_co, subarray_v_qy_qz, N, M, V, Q)
         
         # ビーム割当に必要な関数
         a_phi_theta = channel.define_a(V, N, M, phi_rad, theta_rad)
         b_varphi_eta = channel.define_b_verphi_eta(N, M, eta_rad)
         zeta = channel.define_zeta(V)
-        ####################################################
-        
         Amp_per_career_desital = np.sqrt(Pi) / np.sqrt(Pu)
         
         # UEのアンテナ素子#0から送信されたSPm,nの，原点Oでの，周波数fkにおける複素振幅 ㊺
@@ -114,21 +99,19 @@ def Channel_Matrix_Calculation(setting, d, NorF):
         a_O_m_n_u_k = np.transpose(a_temp, (1, 2, 0))
 
         # 第1散乱体と原点O間で電波が伝搬に要する時間 ㉒
-        r_tmp = np.zeros((N,max(M)))
-        for i, values in enumerate(r):
-            r_tmp[i, :len(values)] = values  # 長さが足りない部分はそのままゼロ
-        r = r_tmp
-        tau_1_ns = r / c_ns
+        R_tmp = np.zeros((N,max(M)))
+        for i, values in enumerate(R):
+            R_tmp[i, :len(values)] = values  # 長さが足りない部分はそのままゼロ
+        R = R_tmp
+        tau_1_ns = R / c_ns
 
         # 第1散乱体での複素振幅 ㊻
-        # tau_1_ns を (N, M, 1) に reshape → U 軸にブロードキャストできるように
         tau_exp = np.exp(1j * 2 * np.pi * f_GHz_val * tau_1_ns)[:, :, None]  # shape: (N, M, 1)
         # 要素ごとの積で計算完了！
         a_1_m_n_u_k = a_O_m_n_u_k * tau_exp  # shape: (N, M, U)
 
         # 第1散乱体とアンテナ間の伝搬時間 ㉓
         tau_nmvqyqz = dis_sca1_to_anntena / c_ns
-
 
         a = np.zeros((N, max(M), V, U, Q, Q), dtype=np.complex64)
         
@@ -137,14 +120,12 @@ def Channel_Matrix_Calculation(setting, d, NorF):
         a = np.einsum('nmu,vnm,vnmyz->nmvuyz', a_1_m_n_u_k, a_phi_theta, exp_term, optimize=True)
         a = np.sum(a, (0,1))
         
-        #####################################################################################################
-
         w_DD_pape = np.zeros((V, Q, Q), dtype=np.complex64)
         g_DD_pape = np.zeros((V, N, max(M)), dtype=np.complex64)
         invalid_indices = []  # vの削除対象インデックスを格納するリスト
 
         h_u_v_k = np.zeros((W,U,V), dtype=complex)
-        h_u_v_k_mea = np.zeros((W,U,V), dtype=complex)
+        h_u_v_k_est = np.zeros((W,U,V), dtype=complex)
         n_dash = channel.noise_u_v_k(U,V)
         for w in range(W):            
             v = 0  # v をループ内で一意に管理
@@ -169,16 +150,14 @@ def Channel_Matrix_Calculation(setting, d, NorF):
 
 ###########################################################################################################################
 # 近傍界チャネル
-            if NorF == 'Near':
-                # h_u_v_k を計算 (v -> V' に縮小)
+            if NF_setting == 'Near':
                 a = a[valid_indices]
                 h_u_v_k[w] = np.einsum('vyz,vuyz->uv', w_DD_pape_reduced, a, optimize=True)
-                h_u_v_k_mea[w] = h_u_v_k[w] + n_dash[:,:,0] / np.sqrt(Pu/2000)
+                h_u_v_k_est[w] = h_u_v_k[w] + n_dash[:,:,0] / np.sqrt(Pu/2000)
                 
-
 ############################################################################################################################################
 # 遠方界チャネル
-            elif NorF == 'Far':
+            elif NF_setting == 'Far':
                 h_dash_far = np.zeros((U, V, N, max(M)))
                 # 必要に応じて次元を追加 (ブロードキャスト用)
                 for i in range(N):
@@ -224,20 +203,18 @@ def Channel_Matrix_Calculation(setting, d, NorF):
                     h_dash_far[:, :, n, M[n]:] = 0  # M[n] 以降の次元を 0 にする
                     
                 # 全てのマルチパスの寄与
-                # h_farの形状を確認
-                
                 h_u_v_k[w] = np.sum(h_dash_far, (2,3))
-                h_u_v_k_mea[w] = h_u_v_k[w] + n_dash[:,:,0] / np.sqrt(Pu / 2000)
+                h_u_v_k_est[w] = h_u_v_k[w] + n_dash[:,:,0] / np.sqrt(Pu / 2000)
 
         h_tru_list.append(h_u_v_k)
-        h_mea_list.append(h_u_v_k_mea)
-    save_dir = "C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_InF_1000/Channel_InF_1000_step4_ChannelMatrix"
-    os.makedirs(save_dir, exist_ok = True)
-    np.save(f"{save_dir}/{setting}_1000_step4_Htru_{NorF}_d={d}.npy", h_tru_list)
-    np.save(f"{save_dir}/{setting}_1000_step4_Hmea_{NorF}_d={d}.npy", h_mea_list) 
-    print(f'{NorF}:{d} has done')
-
-
+        h_est_list.append(h_u_v_k_est)
+    
+    save_dir =  f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}/"
+    os.makedirs(save_dir + "/H_tru", exist_ok = True)
+    np.save(f"{save_dir}/H_tru/d={d}.npy", h_tru_list)
+    os.makedirs(save_dir + "/H_est", exist_ok = True)
+    np.save(f"{save_dir}/H_est/d={d}.npy", h_est_list) 
+    print(f'{NF_setting}:{d} has done')
 
 # パラメータ設定
 Pu = 10
@@ -252,6 +229,9 @@ Q=64
 W =12
 
 # 実行部分
-channel_type = 'InF'
+channel_type = 'InH'
+NF_setting = 'Near'
+
+# シミュレーション実行
 for d in range(5,31,5):
-    Channel_Matrix_Calculation(channel_type, d, 'Near_3')
+    Channel_Matrix_Calculation(channel_type, d, NF_setting)

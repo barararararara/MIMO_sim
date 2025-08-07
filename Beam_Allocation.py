@@ -62,10 +62,9 @@ def Beam_Allocation_function(channel_type, d, NF_setting, W, Power):
                     beam_allocation[Channel_number, face_index, w, 1, pattern-1] = pe
                     if k == 3:
                         break
-    save_dir = f"C:/Users/tai20/Downloads/研究データ/Data"
-    os.makedirs(f"C:/Users/tai20/Downloads/研究データ/Data", exist_ok=True)
-    
-    np.save(f'{save_dir}/BA.npy', beam_allocation)
+    save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Beamallocation/{NF_setting}"
+    os.makedirs(save_dir, exist_ok=True)
+    np.save(f'{save_dir}/d={d}.npy', beam_allocation)
 
 # パラメータ設定
 Q = 64
@@ -78,15 +77,17 @@ g_dB = 0
 f = np.linspace(141.50025*1e9, 142.49975*1e9, 2000) #2000個の周波数
 
 # 設定
-channel_type = "InF"
-NF_setting = "Near_3"
+channel_type = "InH"
+NF_setting = "Near"
 # スレッショルド値
 threshold = -73
 # 割り当て数の最大
 W=12
 
-Power_data = np.load("C:/Users/tai20/Downloads/2025-07-24_11-31-01_InF_step2_NearPower_d=20.npy", allow_pickle=True)
-# シミュレーション実行
-d = 20
-Beam_Allocation_function(channel_type, d, NF_setting, 12, Power_data)
 
+
+# シミュレーション実行
+for d in range(5, 31, 5):  # d = 5, 10, ..., 30
+    load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Power"
+    Power_data = np.load(f"{load_dir}/d={d}/Power_{NF_setting}.npy", allow_pickle=True)
+    Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data)
