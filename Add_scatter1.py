@@ -2,11 +2,12 @@ import numpy as np
 import math
 from multiprocessing import Pool
 import Channel_functions as channel
+import os
 
 # 設定
-channel_type = "InH"
-NF_setting = "Near_3"
-d=5
+channel_type = "InF"
+NF_setting = "Near"
+d= 5
 
 # 必要なパラメータ設定
 lam = (3.0 * 1e8) / (142 * 1e9)
@@ -78,7 +79,8 @@ def process_single_link(channel_base,channel_type,d):
         "subarray_v_qy_qz": subarray_v_qy_qz, "dis_sca1_to_anntena": dis_sca1_to_anntena
     }
 
-save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/{channel_type}/{NF_setting}/d={d}"
+save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}"
+os.makedirs(save_dir, exist_ok=True)
 if __name__ == '__main__':
     with Pool() as pool:
         args = [(channel_base, channel_type, d) for channel_base in Base.tolist()]

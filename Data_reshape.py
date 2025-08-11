@@ -3,11 +3,11 @@ import os
 from glob import glob
 
 # 設定
-channel_type = "InH"
+channel_type = "InF"
 NF_setting = "Near"
 d = 30
 
-Scatter1 = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/{NF_setting}/d={d}/Scatter1.npy", allow_pickle=True)
+Scatter1 = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
 
 N = []
 M = []
@@ -22,7 +22,7 @@ for i in range(1000):
         M_flat.append(Scatter1[i]['M'][n])
 
 # 保存先ディレクトリ作成
-save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/{NF_setting}/d={d}/Flattened"
+save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}/Flattened"
 os.makedirs(save_dir, exist_ok=True)
 
 def flatten(multipath, flatten_data, N, M, keys):
