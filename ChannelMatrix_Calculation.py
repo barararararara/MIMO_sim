@@ -128,6 +128,7 @@ def Channel_Matrix_Calculation(channel_type, d, NF_setting):
         h_u_v_k_est = np.zeros((W,U,V), dtype=complex)
         n_dash = channel.noise_u_v_k(U,V)
         for w in range(W):            
+            invalid_indices = []  # 各wごとに初期化
             v = 0  # v をループ内で一意に管理
             for face in range(3):
                 for array in range(4):
@@ -210,8 +211,10 @@ def Channel_Matrix_Calculation(channel_type, d, NF_setting):
         h_est_list.append(h_u_v_k_est)
     
     save_dir =  f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}/"
+    
     os.makedirs(save_dir + "/H_tru", exist_ok = True)
     np.save(f"{save_dir}/H_tru/d={d}.npy", h_tru_list)
+    
     os.makedirs(save_dir + "/H_est", exist_ok = True)
     np.save(f"{save_dir}/H_est/d={d}.npy", h_est_list) 
     print(f'{NF_setting}:{d} has done')
@@ -229,9 +232,9 @@ Q=64
 W =12
 
 # 実行部分
-channel_type = 'InH'
-NF_setting = 'Far'
+channel_type = 'InF'
+NF_setting = 'Near'
 
 # シミュレーション実行
-for d in range(5,31,5):
-    Channel_Matrix_Calculation(channel_type, d, NF_setting)
+d=30
+Channel_Matrix_Calculation(channel_type, d, NF_setting)

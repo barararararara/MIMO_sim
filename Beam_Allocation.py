@@ -77,17 +77,16 @@ g_dB = 0
 f = np.linspace(141.50025*1e9, 142.49975*1e9, 2000) #2000個の周波数
 
 # 設定
-channel_type = "InH"
-NF_setting = "Far"
+channel_type = "InF"
+NF_setting = "Near"
 # スレッショルド値
 threshold = -73
 # 割り当て数の最大
 W=12
 
-
-
 # シミュレーション実行
 for d in range(5, 31, 5):  # d = 5, 10, ..., 30
     load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Power"
     Power_data = np.load(f"{load_dir}/d={d}/Power_{NF_setting}.npy", allow_pickle=True)
-    Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data)
+    print(np.shape(Power_data))
+    # Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data)

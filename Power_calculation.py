@@ -4,7 +4,7 @@ import multiprocessing as mp
 import time
 
 # 設定
-channel_type = "InH"
+channel_type = "InF"
 NF_setting = "Near"
 V = 12
 Q = 64

@@ -137,27 +137,27 @@ def calc_channel_capacity(H, H_tru):
 
 # メインの処理
 # 設定
-channel_type = 'InH'
-NF_setting = 'Far'
-load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}/H_tru"
+channel_type = 'InF'
+NF_setting = 'Near'
+load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}"
 
 for d in range(5, 31, 5):  # d = 5, 10, ..., 30
 
-    H_tru = np.load(f"{load_dir}/d={d}.npy", allow_pickle=True)
-    H_est = np.load(f"{load_dir}/d={d}.npy", allow_pickle=True)
+    H_tru = np.load(f"{load_dir}/H_tru/d={d}.npy", allow_pickle=True)
+    H_est = np.load(f"{load_dir}/H_est/d={d}.npy", allow_pickle=True)
     cap_tru, eigval_tru = calc_channel_capacity(H_tru, H_tru)
     cap_est, eigval_est = calc_channel_capacity(H_est, H_tru)
     
     # 保存パス
-    save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Capacity/{NF_setting}"
+    save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Capacity/{NF_setting}/d={d}"
     # ディレクトリがなければ作る
     os.makedirs(save_dir, exist_ok=True)
 
     # # Capacityの保存
-    np.save(f"{save_dir}", cap_tru)
-    np.save(f"{save_dir}", cap_est)
+    np.save(f"{save_dir}/Capacity_Htru.npy", cap_tru)
+    np.save(f"{save_dir}/Capacity_Hest.npy", cap_est)
 
     # 固有値の保存（リストのままだとnp.saveできないのでobject指定）
-    np.save(f"{save_dir}/eigvals_Htru_d={d}.npy", eigval_tru, allow_pickle=True)
-    np.save(f"{save_dir}/eigvals_Hest_d={d}.npy", eigval_est, allow_pickle=True)
+    np.save(f"{save_dir}/eigvals_Htru.npy", eigval_tru, allow_pickle=True)
+    np.save(f"{save_dir}/eigvals_Hest.npy", eigval_est, allow_pickle=True)
     print(f'{d} has done')
