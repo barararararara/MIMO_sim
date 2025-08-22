@@ -722,8 +722,7 @@ def far_Power_inc_noise(V,Q,f,complex_Amp_at_O,g_DD,n_k_v,a):
     return P_far_sub_dash_dBm
 
 # 現時点で検討している、0,0,5m,pe=31についてのグラフを表示する関数 25/01/21
-def plot_graph_0(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad):
-    pe=31
+def plot_graph_0(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad,pe=31):
     # 0度の面に関して
     phi_dire = np.zeros(Q)
     thete_dire = np.asin((2*(pe+1)/Q - 1))
@@ -764,8 +763,7 @@ def plot_graph_0(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad):
     plt.show()
 
 # 現時点で検討している、0,0,5m,pe=31についてのグラフを表示する関数 25/01/21
-def plot_graph_120(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad):
-    pe=31
+def plot_graph_120(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad, pe=31):
     # 0度の面に関して
     phi_dire = np.zeros(Q)
     thete_dire = np.asin((2*(pe+1)/Q - 1))
@@ -804,8 +802,7 @@ def plot_graph_120(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad):
     plt.show()
 
 # 現時点で検討している、0,0,5m,pe=31についてのグラフを表示する関数 25/01/21
-def plot_graph_240(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad):
-    pe=31
+def plot_graph_240(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad, pe=31):
     # 0度の面に関して
     phi_dire = np.zeros(Q)
     thete_dire = np.asin((2*(pe+1)/Q - 1))
