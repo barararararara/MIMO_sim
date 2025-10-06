@@ -66,6 +66,7 @@ def process_single_link(channel_base,channel_type,d):
     theta_rad = [np.radians(theta_deg[n]) for n in range(N)]
     sca1_xyz_co = channel.scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad)
     subarray_v_qy_qz = channel.calc_anntena_xyz(lam, V, Q)
+    # subarray_v_qy_qz = channel.calc_anntena_xyz_wide(lam, V, Q, S_sub=10*lam)
     dis_sca1_to_anntena = channel.distance_scatter1_to_eachanntena(sca1_xyz_co, subarray_v_qy_qz, N, M, V, Q)
 
     return {

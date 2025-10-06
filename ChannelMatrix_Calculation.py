@@ -48,8 +48,11 @@ def Channel_Matrix_Calculation(channel_type, d, NF_setting):
     load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Beamallocation/{NF_setting}"
     beam_allocation  = np.load(f'{load_dir}/d={d}.npy', allow_pickle=True)
     
-    # サブアレーの各素子の座標を計算
+    # サブアレーの各素子の座標を取得
     subarray_coordinates_v_qy_qz = np.load('C:/Users/tai20/Downloads/NYUSIMchannel_shelter/subarray_coordinates_Q64.npy')
+    # # サブアレー間隔を調整したアンテナの座標を計算
+    # S_sub = 0.5  # サブアレー間隔（波長単位）
+    # channel.calc_anntena_xyz_wide(lam, V, Q, S_sub)
     x = subarray_coordinates_v_qy_qz[:,0,0,0]
     y = subarray_coordinates_v_qy_qz[:,0,0,1]
     for Channel_number in range(1000):
