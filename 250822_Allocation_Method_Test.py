@@ -55,9 +55,17 @@ Channel_number = 0
 
 channel_data_1000 = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
 channel_data = channel_data_1000[Channel_number]
+# print(channel_data['varphi_deg'])
+# print(channel_data['eta_deg'])
+# print(channel_data['phi_deg'])
+# print(channel_data['theta_deg'])
+# print(channel_data['N'])
+# print(channel_data['M'])
 Power_1000 = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Power/d={d}/Power_{NF_setting}.npy")
 Power = Power_1000[Channel_number]
-
+# cf.plot_graph_0(d, Q, Power, Power, np.radians(channel_data['theta_deg']), np.radians(channel_data['phi_deg']))
+# cf.plot_graph_120(d, Q, Power, Power, np.radians(channel_data['theta_deg']), np.radians(channel_data['phi_deg']))
+# cf.plot_graph_240(d, Q, Power, Power, np.radians(channel_data['theta_deg']), np.radians(channel_data['phi_deg']))
 # ビーム割当法１
 def Beam_allocation_method_1(Power, threshold):
     """
@@ -277,15 +285,26 @@ Pt_mW = 1000/2000
 P_noise_mW = 6.31*1e-12
 
 # グラム行列の固有値と固有ベクトルを求める関数
+# def calc_eigval(H):
+#     H_H_H = np.conjugate(H).T @ H
+#     eigval, eigvec = np.linalg.eigh(H_H_H)
+#     # 固有値を降順にソートし、インデックスを取得
+#     sorted_indices = np.argsort(eigval)[::-1]
+#     # 固有値と固有ベクトルをソート
+#     eigval = np.real(eigval[sorted_indices])  # 固有値を降順でソート
+#     eigvec = eigvec[:, sorted_indices]   
+#     print('eigval:', eigval)
+#     # 固有ベクトルを対応するインデックスで並べ替え
+#     # 固有値が負の値のものを0に置き換え
+#     eigval[eigval < 0] = 0
+#     eigval = eigval.astype(float)
+#     return eigval, eigvec
+
+# SVDとやらで計算するバージョン
 def calc_eigval(H):
-    H_H_H = np.conjugate(H).T @ H
-    eigval, eigvec = np.linalg.eig(H_H_H)
-    # 固有値を降順にソートし、インデックスを取得
-    sorted_indices = np.argsort(eigval)[::-1]
-    # 固有値と固有ベクトルをソート
-    eigval = np.real(eigval[sorted_indices])  # 固有値を降順でソート
-    eigvec = eigvec[:, sorted_indices]        # 固有ベクトルを対応するインデックスで並べ替え
-    # 固有値が負の値のものを0に置き換え
+    U, s, Vh = np.linalg.svd(H, full_matrices=False)
+    eigval = s**2              # 固有値（Gram行列 HᴴH の）
+    eigvec = Vh.conj().T       # 固有ベクトル（右特異ベクトル）
     eigval[eigval < 0] = 0
     eigval = eigval.astype(float)
     return eigval, eigvec
@@ -320,6 +339,7 @@ def water_filling_ratio(eig_vals, Pt, P_noise, tol=1e-12):
         if np.all(p_alloc_subset > -tol):
             p_alloc_subset = np.maximum(p_alloc_subset, 0)  # 数値誤差対策
             p_alloc_subset /= np.sum(p_alloc_subset)  # 合計1に正規化
+            print('p_alloc_subset:', p_alloc_subset)
             return p_alloc_subset, L
     
     # すべての固有値が極小の場合は、全電力を最も大きい固有値に割り当てる
@@ -384,23 +404,141 @@ def calc_channel_capacity(H, H_tru):
     # plt.show()
     return Capacity, eigval, Ly
 
+# グラム行列の固有値と固有ベクトルを求める関数
+def calc_eigval_Far(H):
+    H_H_H = np.conjugate(H).T @ H
+    eigval, eigvec = np.linalg.eig(H_H_H)
+    # 固有値を降順にソートし、インデックスを取得
+    sorted_indices = np.argsort(eigval)[::-1]
+    # 固有値と固有ベクトルをソート
+    eigval = np.real(eigval[sorted_indices])  # 固有値を降順でソート
+    eigvec = eigvec[:, sorted_indices]        # 固有ベクトルを対応するインデックスで並べ替え
+    # 固有値が負の値のものを0に置き換え
+    eigval[eigval < 0] = 0
+    eigval = eigval.astype(float)
+    return eigval, eigvec
+
+# 注水定理を実行する関数
+def water_filling_ratio_Far(eig_vals, Pt, P_noise, tol=1e-12):
+    """
+    固有値 eig_vals に対して、注水定理に基づく電力分配比 p'_j を計算する関数。
+    固有値は大きい順（λ1,λ2,...,λ_L）で与えられるものとする。
+    
+    Parameters:
+        eig_vals (numpy array): 固有値の配列 (サイズ L_total)
+        Pt (float): 総送信電力
+        P_noise (float): 端末の雑音電力
+        tol (float): 数値誤差の許容範囲
+        
+    Returns:
+        p_alloc_subset (numpy array): 使用したレイヤ数 L_used に対する電力分配比 (要素数 L_used, 合計1)
+        L_used (int): 使用したレイヤ数
+    """
+    norm_factor = Pt / P_noise
+    L_total = len(eig_vals)
+    
+    # 上位 L_total から順に、使用レイヤ数 L を減らして試す
+    for L in range(L_total, 0, -1):
+        lambda_subset = eig_vals[:L]  # 上位 L 個の固有値
+        inv_vals = 1 / (norm_factor * lambda_subset)  # 逆数を計算
+        nu = (1 + np.sum(inv_vals)) / L  # 水準 ν を計算
+        p_alloc_subset = nu - inv_vals  # 各層への分配比 p'_j
+        
+        # すべての p'_j がほぼ正であれば採用
+        if np.all(p_alloc_subset > -tol):
+            p_alloc_subset = np.maximum(p_alloc_subset, 0)  # 数値誤差対策
+            p_alloc_subset /= np.sum(p_alloc_subset)  # 合計1に正規化
+            return p_alloc_subset, L
+    
+    # すべての固有値が極小の場合は、全電力を最も大きい固有値に割り当てる
+    return np.array([1.0]), 1
+
+def generate_s_Far(Ly):
+    # 複素ガウス乱数の生成（実部と虚部を分散0.5で生成）
+    # こうすると、各エントリの平均パワーは 1 
+    s = (np.random.randn(Ly) + 1j * np.random.randn(Ly)) / np.sqrt(2)
+    return s
+
+# チャネル容量を求める関数(注意!! nearとfarで用いるH_truが異なります！！！！)
+def calc_channel_capacity_Far(H, H_tru):
+    Capacity = np.zeros((1000,12))
+    eigvals_all = [[None for _ in range(12)] for _ in range(1000)]  # 固有値を保存するための2次元リスト
+    L_used_list = []
+
+
+    for i in range(1000):
+        for w in range(12):
+            H_val , H_vec = calc_eigval_Far(H[i,w])
+            eigvals_all[i][w] = H_val  # 固有値を保存
+
+            power_allo, Ly = water_filling_ratio_Far(H_val, Pt_mW, P_noise_mW)
+            if i == Channel_number:
+                print('power_allo:', power_allo)
+            p_sqrt = np.sqrt(power_allo)
+            p_diag = np.diag(p_sqrt)
+
+            A = np.sqrt(Pt_mW)*p_diag
+            Te_H = H_vec[:,:Ly]
+
+            n_dash_dash = cf.noise_dash_dash(U)
+            s = generate_s_Far(Ly)
+            x = Te_H @ A @ s
+            y = H_tru[i,w] @ x + n_dash_dash
+            
+
+            N_dash_dash_ly = np.random.normal(0, 1.778e-6, (U,Ly)) + 1j * np.random.normal(0, 1.778e-6, (U,Ly))
+            S = np.eye(Ly)
+            H_eff = H_tru[i,w] @ Te_H @ S + (N_dash_dash_ly / np.sqrt(Pt_mW))
+            Wr = np.ones((U,Ly), dtype=np.complex128)
+            gamma0 = Pt_mW / P_noise_mW
+            I_Ly = np.identity(Ly)
+            W_MMSE = ( np.linalg.inv(H_eff.conj().T @ H_eff + (Ly / gamma0) * I_Ly) @ H_eff.conj().T ).T
+            
+            Wr = W_MMSE
+            r = Wr.T @ y
+            B = Wr.T @ H_tru[i,w] @ Te_H @ A
+            S = np.abs(np.diag(B)) ** 2
+            I = np.sum(np.abs(B) ** 2, axis=1) - np.abs(np.diag(B)) ** 2
+
+            Rnn = P_noise_mW * Wr.T @ (Wr.T).conj().T
+            N = np.diag(Rnn)
+            C_ly = np.log2(S / (I + N) + 1)
+            C = np.real(np.sum(C_ly))
+            Capacity[i,w] = C
+            
+        # L_used を収集
+        L_used_list.append(Ly)
+
+    L_used_array = np.array(L_used_list)
+
+    # ユニークなLとその出現数
+    L_values, counts = np.unique(L_used_array, return_counts=True)
+
+    # 累積分布の計算
+    cdf = np.cumsum(counts) / len(L_used_array)
+
+    return Capacity, L_used_list
 
 Capacity_Far_tru = np.load(f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{channel_type}_1000/ChannelCapacity/Channel_{channel_type}_step5_ChannelCapacity_d={d}/Channel_{channel_type}_step5_Htru_Far_ChannelCapacity_d={5}.npy")
 Capacity_Far_est = np.load(f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{channel_type}_1000/ChannelCapacity/Channel_{channel_type}_step5_ChannelCapacity_d={d}/Channel_{channel_type}_step5_Hmea_Far_ChannelCapacity_d={5}.npy")
-
-
+ChannelMatrix_Far_tru = np.load(f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{channel_type}_1000/Channel_{channel_type}_1000_step4_ChannelMatrix/Channel_{channel_type}_step4_ChannelMatrix_d={d}/Channel_{channel_type}_step4_Htru_Far_d={d}.npy")
+ChannnelMatrix_Far_est = np.load(f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{channel_type}_1000/Channel_{channel_type}_1000_step4_ChannelMatrix/Channel_{channel_type}_step4_ChannelMatrix_d={d}/Channel_{channel_type}_step4_Hmea_Far_d={d}.npy")
+Eigenvals_Far_tru = np.load(f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_InH_1000/ChannelCapacity/Channel_InH_step5_ChannelCapacity_d=5/eigvals_Htru_Far_d=5.npy")
 method1_tru_list = []
 method1_est_list = []
 method2_tru_list = []
 method2_est_list = []
 far_tru_list = []
 far_est_list = []
+L_used_far_tru_list = []
+L_used_far_est_list = []
 channel_data_1000 = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
 Power_1000 = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Power/d={d}/Power_{NF_setting}.npy")
 
+Capacity_Far_tru, L_used_Fartru = calc_channel_capacity_Far(ChannelMatrix_Far_tru, ChannelMatrix_Far_tru)
+Capacity_Far_est, L_used_Farest = calc_channel_capacity_Far(ChannnelMatrix_Far_est, ChannelMatrix_Far_tru)
 
-
-for Channel_number in range(1000):
+for Channel_number in range(1,2,1):
     channel_data = channel_data_1000[Channel_number]
     Power = Power_1000[Channel_number]
 
@@ -411,25 +549,48 @@ for Channel_number in range(1000):
     Htru_m2, Hest_m2 = ChannelMatrix_Calculation(ba_m2, channel_data, f_GHz_val, Pu, c_ns)
 
     cap_tru_m1, eigval_tru_m1, Ly_tru_m1 = calc_channel_capacity(Htru_m1, Htru_m1)
-    cap_est_m1, eigval_est_m1, Ly_est_m1 = calc_channel_capacity(Hest_m1, Htru_m1)
+    # cap_est_m1, eigval_est_m1, Ly_est_m1 = calc_channel_capacity(Hest_m1, Htru_m1)
     cap_tru_m2, eigval_tru_m2, Ly_tru_m2 = calc_channel_capacity(Htru_m2, Htru_m2)
-    cap_est_m2, eigval_est_m2, Ly_est_m2 = calc_channel_capacity(Hest_m2, Htru_m2)
+    # cap_est_m2, eigval_est_m2, Ly_est_m2 = calc_channel_capacity(Hest_m2, Htru_m2)
+
+    # 最大容量のインデックスを取得
+    idx_far_tru = np.argmax(Capacity_Far_tru[Channel_number])
+    print('idx_far_tru:', idx_far_tru)
+    idx_far_est = np.argmax(Capacity_Far_est[Channel_number])
+    # 該当インデックスの容量とレイヤ数を取得
+    Capacity_Far_tru_val = Capacity_Far_tru[Channel_number][idx_far_tru]
+    Capacity_Far_est_val = Capacity_Far_est[Channel_number][idx_far_est]
+    L_far_tru = L_used_Fartru[idx_far_tru]
+    L_far_est = L_used_Farest[idx_far_est]
 
     method1_tru_list.append(cap_tru_m1)
-    method1_est_list.append(cap_est_m1)
+    # method1_est_list.append(cap_est_m1)
     method2_tru_list.append(cap_tru_m2)
-    method2_est_list.append(cap_est_m2)
-    far_tru_list.append(np.max(Capacity_Far_tru[Channel_number]))
-    far_est_list.append(np.max(Capacity_Far_est[Channel_number]))
-    print(f"Channel #{Channel_number} processed.")
+    # method2_est_list.append(cap_est_m2)
+    # リストに追加
+    far_tru_list.append(Capacity_Far_tru_val)
+    far_est_list.append(Capacity_Far_est_val)
+    L_used_far_tru_list.append(L_far_tru)
+    L_used_far_est_list.append(L_far_est)
 
-print('Average Channel Capacities over 100 Channels:')
-print('Method 1 Tru', np.mean(method1_tru_list).round(3))
-print('Method 1 Est', np.mean(method1_est_list).round(3))
-print('')
-print('Method 2 Tru', np.mean(method2_tru_list).round(3))
-print('Method 2 Est', np.mean(method2_est_list).round(3))
-print('')
-print('Far Tru', np.mean(far_tru_list).round(3))
-print('Far Est', np.mean(far_est_list).round(3))
+    print(f"Channel #{Channel_number}")
+    # print('ba_m1', ba_m1)
+    print(f"Method 1 Tru:", cap_tru_m1.round(3), "EigenValue_True_M1 :", eigval_tru_m1, "Ly_tru_m1 :", Ly_tru_m1)
+    # "Est:", cap_est_m1.round(3), Ly_est_m1)
+    print(f"Method 2 Tru:", cap_tru_m2.round(3), "EigenValue_Est_M2 : ",eigval_tru_m2, "Ly_tru_m2 :", Ly_tru_m2)
+    # , "Est:", cap_est_m2.round(3), Ly_est_m2)
+    print(f"Far Tru:", Capacity_Far_tru_val.round(3), L_far_tru, "Est:", Capacity_Far_est_val.round(3), L_far_est)
+    print("Eigenvals_Far_tru", Eigenvals_Far_tru[Channel_number][idx_far_tru])
+    print("--------------------------------------------------")
+
+# print('Average Channel Capacities over 1000 Channels:')
+# print('Method 1 Tru', np.mean(method1_tru_list).round(3))
+# print('Method 1 Est', np.mean(method1_est_list).round(3))
+# print('')
+# print('Method 2 Tru', np.mean(method2_tru_list).round(3))
+# print('Method 2 Est', np.mean(method2_est_list).round(3))
+# print('')
+# print('Far Tru', np.mean(far_tru_list).round(3))
+# print('Far Est', np.mean(far_est_list).round(3))
+
 

@@ -477,10 +477,12 @@ def define_a(V, N, M, phi_rad, theta_rad):
     for v in range(V):
         for n in range(N):
             for m in range(M[n]):
-                if math.pi/2 <= (phi_rad[n][m]-zeta[v]) % (2*math.pi) and (phi_rad[n][m]-zeta[v]) % (2*math.pi) <= 3*math.pi/2:
+                diff = (phi_rad[n][m] - zeta[v] + math.pi) % (2*math.pi) - math.pi
+                if abs(diff) > math.pi/2:  # 背面
                     a[v][n][m] = 0
-                else:
-                    a[v][n][m] = 2.282*np.cos(theta_rad[n][m])*np.sin((math.pi/2)*np.cos(theta_rad[n][m])*np.cos(phi_rad[n][m] - zeta[v]))
+                else:                      # 前面
+                    a[v][n][m] = 2.282*np.cos(theta_rad[n][m]) * \
+                                np.sin((math.pi/2)*np.cos(theta_rad[n][m]) * np.cos(diff))
                 
     return(a)
 
