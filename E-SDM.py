@@ -4,16 +4,15 @@ import matplotlib.pyplot as plt
 import Channel_functions as channel
 import os
 
-
 Pt_mW = 1000/2000
-P_noise_mW = 6.31*1e-12
+P_noise_mW = 6.31e-12
 U=8
-d=5
+
 #####################################################################################################################
 # グラム行列の固有値と固有ベクトルを求める関数
 def calc_eigval(H):
     H_H_H = np.conjugate(H).T @ H
-    eigval, eigvec = np.linalg.eig(H_H_H)
+    eigval, eigvec = np.linalg.eigh(H_H_H)
     # 固有値を降順にソートし、インデックスを取得
     sorted_indices = np.argsort(eigval)[::-1]
     # 固有値と固有ベクトルをソート
@@ -25,53 +24,51 @@ def calc_eigval(H):
     return eigval, eigvec
 
 # 注水定理を実行する関数
-def water_filling_ratio(eig_vals, Pt, P_noise, tol=1e-12):
+def water_filling_ratio(eig_vals, Pt, P_noise, iters=200):
     """
-    固有値 eig_vals に対して、注水定理に基づく電力分配比 p'_j を計算する関数。
-    固有値は大きい順（λ1,λ2,...,λ_L）で与えられるものとする。
-    
-    Parameters:
-        eig_vals (numpy array): 固有値の配列 (サイズ L_total)
-        Pt (float): 総送信電力
-        P_noise (float): 端末の雑音電力
-        tol (float): 数値誤差の許容範囲
-        
-    Returns:
-        p_alloc_subset (numpy array): 使用したレイヤ数 L_used に対する電力分配比 (要素数 L_used, 合計1)
-        L_used (int): 使用したレイヤ数
+    eig_vals: 固有値 λ_j
+    Pt: 総送信電力
+    P_noise: 雑音電力
     """
-    norm_factor = Pt / P_noise
-    L_total = len(eig_vals)
+    tol = 1e-6
+    g = np.asarray(eig_vals, float)
+    g = np.maximum(g, 1e-15)  # ゼロ割防止
+
+    lo, hi = 0.0, 1e12
+    for _ in range(iters):
+        alpha = (lo + hi) / 2.0
+        P = np.maximum(1/alpha - P_noise / g, 0.0)
+        S = P.sum()
+        if abs(S - Pt) < tol:
+            break
+        if S > Pt:
+            lo = alpha
+        else:
+            hi = alpha
+
+    # ここで Ly と p_ratio を出す
+    Ly = int(np.count_nonzero(P > tol))  # 有効レイヤ数
+    if P.sum() > 0:
+        p_ratio = P / P.sum()  # 割当比（合計1）
+    else:
+        p_ratio = P
     
-    # 上位 L_total から順に、使用レイヤ数 L を減らして試す
-    for L in range(L_total, 0, -1):
-        lambda_subset = eig_vals[:L]  # 上位 L 個の固有値
-        inv_vals = 1 / (norm_factor * lambda_subset)  # 逆数を計算
-        nu = (1 + np.sum(inv_vals)) / L  # 水準 ν を計算
-        p_alloc_subset = nu - inv_vals  # 各層への分配比 p'_j
-        
-        # すべての p'_j がほぼ正であれば採用
-        if np.all(p_alloc_subset > -tol):
-            p_alloc_subset = np.maximum(p_alloc_subset, 0)  # 数値誤差対策
-            p_alloc_subset /= np.sum(p_alloc_subset)  # 合計1に正規化
-            return p_alloc_subset, L
-    
-    # すべての固有値が極小の場合は、全電力を最も大きい固有値に割り当てる
-    return np.array([1.0]), 1
+    # 二分探索の最後に:
+    alpha = (lo + hi) / 2.0
+    mu = 1.0 / alpha
+    return p_ratio[:Ly], Ly
 
 def generate_s(Ly):
     # 複素ガウス乱数の生成（実部と虚部を分散0.5で生成）
-    # こうすると、各エントリの平均パワーは 1 
     s = (np.random.randn(Ly) + 1j * np.random.randn(Ly)) / np.sqrt(2)
     return s
 
 # チャネル容量を求める関数(注意!! nearとfarで用いるH_truが異なります！！！！)
-def calc_channel_capacity(H, H_tru):
+def calc_channel_capacity(H, H_tru, Pt_mW, P_noise_mW, TorF):
     Capacity = np.zeros((1000,12))
     eigvals_all = [[None for _ in range(12)] for _ in range(1000)]  # 固有値を保存するための2次元リスト
-    L_used_list = []
-
-
+    L_used = np.zeros((1000,12), dtype=int)  # 使用されたレイヤ数を保存する配列
+    Ly_star = np.zeros(1000, dtype=int)  # 各チャネルで選択された最適レイヤ数を保存する配列
     for i in range(1000):
         for w in range(12):
             H_val , H_vec = calc_eigval(H[i,w])
@@ -89,7 +86,6 @@ def calc_channel_capacity(H, H_tru):
             x = Te_H @ A @ s
             y = H_tru[i,w] @ x + n_dash_dash
             
-
             N_dash_dash_ly = np.random.normal(0, 1.778e-6, (U,Ly)) + 1j * np.random.normal(0, 1.778e-6, (U,Ly))
             S = np.eye(Ly)
             H_eff = H_tru[i,w] @ Te_H @ S + (N_dash_dash_ly / np.sqrt(Pt_mW))
@@ -110,54 +106,62 @@ def calc_channel_capacity(H, H_tru):
             C = np.real(np.sum(C_ly))
             Capacity[i,w] = C
             
-        # L_used を収集
-        L_used_list.append(Ly)
+            # L_used を収集
+            L_used[i,w] = Ly
+        
+            w_star = np.argmax(Capacity[i,:])
+            Ly_star[i] = L_used[i,w_star]
 
-    L_used_array = np.array(L_used_list)
-
-    # ユニークなLとその出現数
-    L_values, counts = np.unique(L_used_array, return_counts=True)
-
-    # 累積分布の計算
-    cdf = np.cumsum(counts) / len(L_used_array)
-
+    print(w_star)
+    print("Ly_star", Ly_star)
     # プロット
-    plt.figure(figsize=(8, 5))
-    plt.step(L_values, cdf, where='post', label='CDF of L_used')
-    plt.xlabel('L_used (Number of layers)')
-    plt.ylabel('Cumulative Probability')
-    plt.title('CDF of Number of Layers Used in Water-Filling')
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    # plt.show()
+    min_L = int(Ly_star.min())
+    max_L = int(Ly_star.max())
+    bins  = np.arange(min_L - 0.5, max_L + 1.5, 1)  # 0.5オフセット
+
+    plt.hist(Ly_star, bins=bins, color='b', alpha=0.6, rwidth=0.8)
+    plt.xticks(range(1,13))  # 目盛りは整数に
+    plt.xlabel('Used Layers')
+    plt.ylabel('Frequency')
+    plt.title(f'No. of Layers d={d} {NF_setting} {TorF}')
+    plt.grid(alpha=0.3)
+    plt.show()
+    
     return Capacity, eigvals_all
 
 ####################################################################################################################
 
 # メインの処理
 # 設定
-channel_type = 'InF'
+Method = 'Mirror'
+channel_type = 'InH'
+Ssub_lam = 10  # サブアレー間隔(単位: 波長)
 NF_setting = 'Near'
-load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}"
 
-for d in range(5, 31, 5):  # d = 5, 10, ..., 30
 
-    H_tru = np.load(f"{load_dir}/H_tru/d={d}.npy", allow_pickle=True)
-    H_est = np.load(f"{load_dir}/H_est/d={d}.npy", allow_pickle=True)
-    cap_tru, eigval_tru = calc_channel_capacity(H_tru, H_tru)
-    cap_est, eigval_est = calc_channel_capacity(H_est, H_tru)
-    
-    # 保存パス
-    save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Capacity/{NF_setting}/d={d}"
-    # ディレクトリがなければ作る
-    os.makedirs(save_dir, exist_ok=True)
+d=5
+load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/Channel_Matrix/{NF_setting}"
+H_tru = np.load(f"{load_dir}/H_tru/d={d}.npy", allow_pickle=True)
+H_est = np.load(f"{load_dir}/H_est/d={d}.npy", allow_pickle=True)
+# load_dir = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/InH_CoherentSum/InH_Simple_CoherentSum/ChannelMatrix"
+# H_tru = np.load(f"{load_dir}/Channel_InH_1000_step4_Htru_Near_d=5.npy", allow_pickle=True)
+# H_est = np.load(f"{load_dir}/Channel_InH_1000_step4_Hmea_Near_d=5.npy", allow_pickle=True)
+cap_tru, eigval_tru = calc_channel_capacity(H_tru, H_tru, Pt_mW, P_noise_mW, "True")
+cap_est, eigval_est = calc_channel_capacity(H_est, H_tru, Pt_mW, P_noise_mW, "Est")
 
-    # # Capacityの保存
-    np.save(f"{save_dir}/Capacity_Htru.npy", cap_tru)
-    np.save(f"{save_dir}/Capacity_Hest.npy", cap_est)
 
-    # 固有値の保存（リストのままだとnp.saveできないのでobject指定）
-    np.save(f"{save_dir}/eigvals_Htru.npy", eigval_tru, allow_pickle=True)
-    np.save(f"{save_dir}/eigvals_Hest.npy", eigval_est, allow_pickle=True)
-    print(f'{d} has done')
+
+"""
+# 保存パス
+save_dir = f"C:/Users/tai20/Downloads/sim_data/Data/Mirror/{channel_type}/Ssub={Ssub_lam}lam/Channel_Capacity/{NF_setting}/d={d}"
+os.makedirs(save_dir, exist_ok=True)
+
+# # Capacityの保存
+np.save(f"{save_dir}/Capacity_Htru.npy", cap_tru)
+np.save(f"{save_dir}/Capacity_Hest.npy", cap_est)
+
+# 固有値の保存（リストのままだとnp.saveできないのでobject指定）
+np.save(f"{save_dir}/eigvals_Htru.npy", eigval_tru, allow_pickle=True)
+np.save(f"{save_dir}/eigvals_Hest.npy", eigval_est, allow_pickle=True)
+print(f'{NF_setting} : {d} has done')
+"""

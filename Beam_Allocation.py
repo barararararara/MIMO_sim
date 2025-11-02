@@ -15,7 +15,7 @@ def Beam_Allocation_function(channel_type, d, NF_setting, W, Power):
     rows_top = []  # topN
     rows_per_v = []  # 各vごとの上位候補
 
-    for Channel_number in range(1, 2, 1):
+    for Channel_number in range(1000):
         for w in range(W):
             v_indices = np.array([1, 5, 9])
             pa_range = np.arange(64)
@@ -134,10 +134,7 @@ def Beam_Allocation_function(channel_type, d, NF_setting, W, Power):
     df_top_per_v = pd.concat(rows_per_v, ignore_index=True)
 
     return beam_allocation, df_sorted_all, df_missing_all, df_top_all, df_top_per_v
-
-    # save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Beamallocation/{NF_setting}"
-    # os.makedirs(save_dir, exist_ok=True)
-    # np.save(f'{save_dir}/d={d}.npy', beam_allocation)
+    
 
 # パラメータ設定
 Q = 64
@@ -149,35 +146,27 @@ Pu_dBm_per_carrer = -23.0
 g_dB = 0
 f = np.linspace(141.50025*1e9, 142.49975*1e9, 2000) #2000個の周波数
 
-# 設定
-channel_type = "InH"
-NF_setting = "Far"
+
 # スレッショルド値
 threshold = -73
 # 割り当て数の最大
 W=12
 
+# 設定
+channel_type = "InH"
+NF_setting = "Far"
+Method = "Mirror"
+S_sub = 0
 
 # シミュレーション実行
-d = 5
-load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Power"
-Power_data = np.load(f"{load_dir}/d={d}/Power_{NF_setting}.npy", allow_pickle=True)
-# # print(np.shape(Power_data))A
-# beam_allocation, df_sc, df_mv, df_top = Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data)
-# print('      Near Field Beam Allocation')
-# print(df_top.to_string(index=False))
-
-# print('\n')
-
-
-# NF_setting = "Far"
-# Power_data_far = np.load(f"{load_dir}/d={d}/Power_Far.npy", allow_pickle=True)
-# beam_allocation_far, df_sc_far, df_mv_far, df_top_far = Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data_far)    
-# print('      Far Field Beam Allocation')
-# print(df_top_far.to_string(index=False))
-
-
-beam_allocation, df_sc, df_mv, df_top, df_top_per_v = Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data)
+for d in range(5, 31, 5):
+    data_dir = f"C:/Users/tai20/Downloads/sim_data/Data"
+    Power_data = np.load(f"{data_dir}/{Method}/{channel_type}/Ssub={S_sub}lam/Power/d={d}/Power_{NF_setting}.npy", allow_pickle=True)
+    beam_allocation, df_sc, df_mv, df_top, df_top_per_v = Beam_Allocation_function(channel_type, d, NF_setting, W, Power_data)
+    # 結果保存
+    save_dir = f"{data_dir}/{Method}/{channel_type}/Ssub={S_sub}lam/Beamallocation/{NF_setting}"
+    os.makedirs(save_dir, exist_ok=True)
+    np.save(f'{save_dir}/d={d}.npy', beam_allocation)
 
 # vごとの上位4候補を表示
-print(df_top_per_v.to_string(index=False))
+# print(df_top_per_v.to_string(index=False))

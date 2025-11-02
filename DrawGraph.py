@@ -9,70 +9,159 @@ def plot_cdf(data, label, color, linestyle, linewidth=5):  # ← 線太くした
 
 
 # 距離別の折れ線グラフ
-def oresen(channel_type):
+def oresen(load_dir):
     d_list = [5, 10, 15, 20, 25, 30]
-    mean_near_tru_Mirror = []
-    mean_near_est_Mirror = []
-    mean_near_tru_Scatter1 = []
-    mean_near_est_Scatter1 = []
-    mean_far_tru = []
-    mean_far_est = []
+    mean_tru = []
+    mean_est = []
     
     for d in d_list:
+        H_tru = np.load(f"{load_dir}/d={d}/Capacity_Htru.npy", allow_pickle=True)
+        H_est = np.load(f"{load_dir}/d={d}/Capacity_Hest.npy", allow_pickle=True)
         
-        # 近傍界条件
-        NF_setting = 'Near'
-        # 鏡面反射条件
-        load_dir_Mirror = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Capacity/{NF_setting}/d={d}"
-        H_near_tru_Mirror = np.load(f"{load_dir_Mirror}/Capacity_Htru.npy", allow_pickle=True)
-        H_near_est_Mirror = np.load(f"{load_dir_Mirror}/Capacity_Hest.npy", allow_pickle=True)
-        # 第1散乱体条件
-        load_dir_Scatter1 = f"C:/Users/tai20/Downloads/NYUSIMchannel_shelter/channel_{channel_type}_1000/ChannelCapacity"
-        H_near_tru_Scatter1 = np.load(f"{load_dir_Scatter1}/Channel_{channel_type}_step5_ChannelCapacity_d={d}/Channel_{channel_type}_step5_Htru_{NF_setting}_ChannelCapacity_d={d}.npy")
-        H_near_est_Scatter1 = np.load(f"{load_dir_Scatter1}/Channel_{channel_type}_step5_ChannelCapacity_d={d}/Channel_{channel_type}_step5_Hmea_{NF_setting}_ChannelCapacity_d={d}.npy")
-        
-        # 遠方界条件
-        NF_setting = 'Far'
-        H_far_tru = np.load(f"{load_dir_Scatter1}/Channel_{channel_type}_step5_ChannelCapacity_d={d}/Channel_{channel_type}_step5_Htru_{NF_setting}_ChannelCapacity_d={d}.npy")
-        H_far_est = np.load(f"{load_dir_Scatter1}/Channel_{channel_type}_step5_ChannelCapacity_d={d}/Channel_{channel_type}_step5_Hmea_{NF_setting}_ChannelCapacity_d={d}.npy")
-        
-        # 近傍界におけるチャネル容量
-        mean_near_tru_Mirror.append(np.mean(np.max(H_near_tru_Mirror, axis=1)))
-        mean_near_est_Mirror.append(np.mean(np.max(H_near_est_Mirror, axis=1)))
-        mean_near_tru_Scatter1.append(np.mean(np.max(H_near_tru_Scatter1, axis=1)))
-        mean_near_est_Scatter1.append(np.mean(np.max(H_near_est_Scatter1, axis=1)))
-        # 遠方界仮定のチャネル容量
-        mean_far_tru.append(np.mean(np.max(H_far_tru, axis=1)))
-        mean_far_est.append(np.mean(np.max(H_far_est, axis=1)))
-        
-        
-    fig, ax = plt.subplots(figsize=(10, 8))  # 幅6インチ、高さ4インチ（縦横比3:2）
-    
-    plt.plot(d_list, mean_far_tru, color='darkblue', linestyle='-', marker='o',markersize=8, label='Far True')
-    plt.plot(d_list, mean_far_est, marker='o', linestyle='-.', markersize=8, label='Far Est')
-    plt.plot(d_list, mean_near_tru_Mirror, color='orangered', linestyle='-', marker='^', markersize=8, label='Near True (Mirror)')
-    plt.plot(d_list, mean_near_est_Mirror, linestyle='-.', marker='^', markersize=8, label='Near Est (Mirror)')
-    plt.plot(d_list, mean_near_tru_Scatter1, color='forestgreen', linestyle='-', marker='*', markersize=12, label='Near True (Scatter1 Unif)')
-    plt.plot(d_list, mean_near_est_Scatter1, color='limegreen', linestyle='-.', marker='*', markersize=12, label='Near Est (Scatter1 Unif)')
+        # チャネル容量
+        mean_tru.append(np.mean(np.max(H_tru, axis=1)))
+        mean_est.append(np.mean(np.max(H_est, axis=1)))
+    return mean_tru, mean_est
 
-    
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
-    plt.title(f'{channel_type}',fontsize=20)
-    plt.xlabel('BS-UE Distance d[m]',fontsize=20)
-    plt.ylabel('Channel Capacity [bps/Hz]',fontsize=20)
-    plt.ylim(bottom=0, top=60)
-    plt.grid(color='gray', linestyle='-', linewidth=0.5)
-    plt.legend(fontsize=18)
-    
-    # PDFで保存
-    # plt.savefig(f"{channel_type}_oresen.pdf", format='pdf')
+Method = 'Mirror'
+channel_type = 'InH'
+Ssub_lam = 10  # サブアレー間隔(単位: 波長)
+NF_setting = 'Near'
+load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/Channel_Capacity/{NF_setting}"
+# 複数比較（例）
+series = [
+    {"label": "Mirror Near Ssub=10λ", "load_dir": load_dir},
+    {"label": "Far Ssub=10λ",  "load_dir": load_dir.replace("/Near", "/Far")},
+    {"label": "Mirror Near Ssub=0",  "load_dir": load_dir.replace("10", "0")},
+    {"label": "Far Ssub=0",  "load_dir": load_dir.replace("10", "0").replace("/Near", "/Far")}
+]
+# —— 複数シリーズを重ね描き（任意）：load_dirごとにラベル指定して重ねる——
+def plot_oresen_multi(series, ylim=(0,60), xlabel="BS-UE Distance d [m]",
+                    ylabel="Channel Capacity [bps/Hz]", title=None, save_pdf=None):
+    """
+    series: list[{"label": str, "load_dir": str}]
+    各load_dirごとに True/Est の2本を重ね描き
+    """
+    d_list = [5, 10, 15, 20, 25, 30]
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for s in series:
+        tru, est = oresen(s["load_dir"])
+        ax.plot(d_list, tru, linestyle='-',  marker='o', label=f'{s["label"]} True')
+        ax.plot(d_list, est, linestyle='-.', marker='o', label=f'{s["label"]} Est')
+    ax.set_xlabel(xlabel, fontsize=18); ax.set_ylabel(ylabel,fontsize=18)
+    ax.tick_params(labelsize=14)
+    if ylim: ax.set_ylim(*ylim)
+    ax.set_xticks(d_list)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.legend(ncol=2, fontsize=16)
+    if title: ax.set_title(title, fontsize=22)
+    plt.tight_layout()
+    if save_pdf:
+        plt.savefig(save_pdf, format='pdf')
     plt.show()
 
-    
-oresen('InH')
-exit()
+plot_oresen_multi(series, title=f"{channel_type}")
 
+
+def _load_ordered_eigs(npy_path, K):
+    """
+    np.save(…, allow_pickle=True) された固有値入れ物から、
+    サンプルごとに降順ソート＆上位K本だけを抽出して 2D配列 (n_samples, K) を返す。
+    None や空要素はスキップ。
+    """
+    raw = np.load(npy_path, allow_pickle=True)
+    rows = []
+    # 配列の形がどうであれ .flat で総当たりして配列(固有値ベクトル)だけ拾う
+    for item in raw.flat:
+        if item is None:
+            continue
+        v = np.asarray(item).ravel()
+        if v.size == 0:
+            continue
+        v = np.real(v)                 # 念のため実数化
+        v = np.sort(v)[::-1]           # 降順
+        rows.append(v[:K])             # 上位K本
+    if not rows:
+        return np.empty((0, K))
+    # 長さ不足を0埋めしないように、短いものはスキップ（通常は等長のはず）
+    L = min(len(r) for r in rows)
+    rows = [r[:L] for r in rows]
+    return np.stack(rows, axis=0)      # (n_samples, L) with L<=K
+
+def _make_cdf(series_1d):
+    """1次元データのCDF（x_sorted, y∈[0,1]）を返す"""
+    x = np.sort(np.asarray(series_1d))
+    n = len(x)
+    y = np.linspace(0, 1, n, endpoint=True)
+    return x, y
+
+def plot_eig_order_cdf(load_dir, d=5, K=5, which=("True","Est"), use_log10=True,
+                    title=None, save_pdf=None):
+    """
+    指定dに対して、λ1..λK の “各順位別” CDF を描画（True/Estを実線/破線で重ねる）
+    which: ("True","Est") / ("True",) / ("Est",)
+    """
+    # パス
+    path_tru = f"{load_dir}/d={d}/eigvals_Htru.npy"
+    path_est = f"{load_dir}/d={d}/eigvals_Hest.npy"
+
+    # データ読み込み
+    mats = {}
+    if "True" in which:
+        eigT = _load_ordered_eigs(path_tru, K)
+        mats["True"] = eigT
+    if "Est" in which:
+        eigE = _load_ordered_eigs(path_est, K)
+        mats["Est"] = eigE
+
+    # 何サンプル拾えたかチェック
+    for k, v in mats.items():
+        if v.shape[0] == 0:
+            print(f"[warn] {k}: サンプルが見つかりませんでした。 pathを確認してください。")
+
+    # プロット
+    fig, ax = plt.subplots(figsize=(10, 8))
+    orders = None
+    styles = {"True":"-", "Est":"--"}
+    for name, M in mats.items():
+        if M.shape[0] == 0:
+            continue
+        # M: (n_samples, L) ここで L は ≤ K
+        L = M.shape[1]
+        orders = list(range(1, L+1))
+        for j in range(L):
+            series = M[:, j]
+            if use_log10:
+                # 非正の値が万一混ざってたら微小値でクリップ
+                series = np.clip(series, 1e-300, None)
+                series = np.log10(series)
+                xlabel = "Eigenvalue λ_j (log10)"
+            else:
+                xlabel = "Eigenvalue λ_j"
+            xs, ys = _make_cdf(series)
+            ax.plot(xs, ys, linestyle=styles[name], label=f"{name} λ{j+1}")
+
+    ax.set_xlabel(xlabel, fontsize=18)
+    ax.set_ylabel("Cumulative Probability", fontsize=18)
+    ax.tick_params(labelsize=14)
+    ax.grid(True, linestyle="--", alpha=0.5)
+    if title:
+        ax.set_title(title + f" (d={d} m, top {K})", fontsize=22)
+    else:
+        ax.set_title(f"Eigenvalue Order CDF (d={d} m, top {K})", fontsize=22)
+    ax.legend(ncol=2, fontsize=13)
+    plt.tight_layout()
+    if save_pdf:
+        plt.savefig(save_pdf, format="pdf")
+    plt.show()
+
+# 使い方例
+# Method = 'Mirror'; channel_type = 'InH'; Ssub_lam = 10; NF_setting = 'Near'
+# load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/Channel_Capacity/{NF_setting}"
+# plot_eig_order_cdf(load_dir, d=5, K=5, which=("True","Est"), use_log10=True, title=f"{channel_type}")
+
+plot_eig_order_cdf(load_dir, title=f"{channel_type} CDF")
+exit()
 """
 r_5 = np.zeros((1000), dtype=object)
 r_10 = np.zeros((1000), dtype=object)

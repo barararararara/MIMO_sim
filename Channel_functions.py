@@ -436,8 +436,9 @@ def calc_anntena_xyz(lam, V, Q):
     return subarray_v_qy_qz
 
 # サブアレー間隔を広げるようなver
-def calc_anntena_xyz_wide(lam, V, Q, S_sub):
-    L = (lam * (Q + 1) / 2) * V / 3 + (V/3 - 1) * S_sub
+def calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=0):
+    Ssub = Ssub_lam * lam
+    L = (lam * (Q + 1) / 2) * V / 3 + (V/3 - 1) * Ssub
     subarray_v_qy_qz = np.zeros((V, Q, Q, 3))
 
     qy_idx, qz_idx = np.meshgrid(np.arange(Q), np.arange(Q), indexing='ij')
@@ -445,15 +446,15 @@ def calc_anntena_xyz_wide(lam, V, Q, S_sub):
     for v in range(V):
         if 0 <= v < V / 3:
             x = L / (2 * math.sqrt(3))
-            y_base = -L / 2 + lam / 2 * (1 + (Q + 1)) * v + S_sub * v
+            y_base = -L / 2 + lam / 2 * (1 + (Q + 1)) * v + Ssub * v
             y = y_base + qy_idx * lam / 2
             z = qz_idx * lam / 2
             coords = np.stack([np.full_like(y, x), y, z], axis=-1)
 
         elif V / 3 <= v < 2 * V / 3:
             offset = v - V / 3
-            x = L / (2 * math.sqrt(3)) - math.sqrt(3) / 2 * (lam / 2 * (1 + (Q + 1) * offset) + S_sub * offset)
-            y = L / 2 - 0.5 * lam / 2 * (1 + (Q + 1) * offset) - 1/2 * S_sub * offset
+            x = L / (2 * math.sqrt(3)) - math.sqrt(3) / 2 * (lam / 2 * (1 + (Q + 1) * offset) + Ssub * offset)
+            y = L / 2 - 0.5 * lam / 2 * (1 + (Q + 1) * offset) - 1/2 * Ssub * offset
             x_shift = -math.sqrt(3) * qy_idx * lam / 4
             y_shift = -qy_idx * lam / 4
             z = qz_idx * lam / 2
@@ -461,8 +462,8 @@ def calc_anntena_xyz_wide(lam, V, Q, S_sub):
 
         else:
             offset = v - 2 * V / 3
-            x = -L / math.sqrt(3) + math.sqrt(3) / 2 * lam / 2 * (1 + (Q + 1) * offset) + math.sqrt(3)/2 * S_sub * offset
-            y = -0.5 * lam / 2 * (1 + (Q + 1) * offset) - 1/2 * S_sub * offset
+            x = -L / math.sqrt(3) + math.sqrt(3) / 2 * lam / 2 * (1 + (Q + 1) * offset) + math.sqrt(3)/2 * Ssub * offset
+            y = -0.5 * lam / 2 * (1 + (Q + 1) * offset) - 1/2 * Ssub * offset
             x_shift = math.sqrt(3) * qy_idx * lam / 4
             y_shift = -qy_idx * lam / 4
             z = qz_idx * lam / 2

@@ -39,20 +39,17 @@ def transform_angle_to_numpy(phi_deg, theta_deg, varphi_deg, eta_deg, N, M):
     return phi_rad_tmp, theta_rad_tmp, varphi_rad_tmp, eta_rad_tmp
 
 # チャネル行列計算関数
-def Channel_Matrix_Calculation(channel_type, d, NF_setting):
+def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, NF_setting, Ssub_lam):
     h_tru_list = []
     h_est_list = []
     V = 12
-    channel_data = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
-    
-    load_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Beamallocation/{NF_setting}"
-    beam_allocation  = np.load(f'{load_dir}/d={d}.npy', allow_pickle=True)
     
     # サブアレーの各素子の座標を取得
-    subarray_coordinates_v_qy_qz = np.load('C:/Users/tai20/Downloads/NYUSIMchannel_shelter/subarray_coordinates_Q64.npy')
-    # # サブアレー間隔を調整したアンテナの座標を計算
-    # S_sub = 0.5  # サブアレー間隔（波長単位）
-    # channel.calc_anntena_xyz_wide(lam, V, Q, S_sub)
+    # subarray_coordinates_v_qy_qz = np.load('C:/Users/tai20/Downloads/NYUSIMchannel_shelter/subarray_coordinates_Q64.npy')
+    
+    # サブアレーの各素子の座標を取得(S_sub=10*lam)
+    lam = (3*1e8) / (142*1e9)
+    subarray_coordinates_v_qy_qz = channel.calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam)
     x = subarray_coordinates_v_qy_qz[:,0,0,0]
     y = subarray_coordinates_v_qy_qz[:,0,0,1]
     for Channel_number in range(1000):
@@ -213,14 +210,8 @@ def Channel_Matrix_Calculation(channel_type, d, NF_setting):
         h_tru_list.append(h_u_v_k)
         h_est_list.append(h_u_v_k_est)
     
-    save_dir =  f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Channel_Matrix/{NF_setting}/"
-    
-    os.makedirs(save_dir + "/H_tru", exist_ok = True)
-    np.save(f"{save_dir}/H_tru/d={d}.npy", h_tru_list)
-    
-    os.makedirs(save_dir + "/H_est", exist_ok = True)
-    np.save(f"{save_dir}/H_est/d={d}.npy", h_est_list) 
-    print(f'{NF_setting}:{d} has done')
+    return h_tru_list, h_est_list
+
 
 # パラメータ設定
 Pu = 10
@@ -235,9 +226,24 @@ Q=64
 W =12
 
 # 実行部分
-channel_type = 'InF'
+Method = 'Mirror'
+channel_type = 'InH'
+Ssub_lam = 0  # サブアレー間隔(単位: 波長)
 NF_setting = 'Near'
+d=5 #距離設定
 
-# シミュレーション実行
-d=30
-Channel_Matrix_Calculation(channel_type, d, NF_setting)
+for d in range(5, 31, 5):
+    load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam"
+    channel_data = np.load(f"{load_dir}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
+    beam_allocation  = np.load(f'{load_dir}/Beamallocation/{NF_setting}/d={d}.npy', allow_pickle=True)
+
+    h_tru_list, h_est_list = Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, NF_setting, Ssub_lam)
+
+    save_dir =  f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/Channel_Matrix/{NF_setting}/"
+
+    os.makedirs(save_dir + "/H_tru", exist_ok = True)
+    np.save(f"{save_dir}/H_tru/d={d}.npy", h_tru_list)
+
+    os.makedirs(save_dir + "/H_est", exist_ok = True)
+    np.save(f"{save_dir}/H_est/d={d}.npy", h_est_list) 
+    print(f'{NF_setting}:{d} has done')

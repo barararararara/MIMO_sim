@@ -4,11 +4,6 @@ from multiprocessing import Pool
 import Channel_functions as channel
 import os
 
-# 設定
-channel_type = "InF"
-NF_setting = "Near"
-d= 5
-
 # 必要なパラメータ設定
 lam = (3.0 * 1e8) / (142 * 1e9)
 Pt = 10
@@ -17,11 +12,17 @@ g_dB = 0
 Q = 64
 V = 12
 
+# 設定
+channel_type = "InF"
+NF_setting = "Near"
+Ssub_lam = 10
+d= 30
+
+
+
 
 # ベースのチャネル情報を取得
-Base = np.load(f"C:/Users/tai20/Downloads/研究データ/Data/{channel_type}/Base.npy", allow_pickle=True)
-
-
+Base = np.load(f"C:/Users/tai20/Downloads/sim_data/Data/Base_{channel_type}.npy", allow_pickle=True)
 def process_single_link(channel_base,channel_type,d):
     L_AOD = channel_base['L_AOD']
     L_AOA = channel_base['L_AOA']
@@ -65,8 +66,8 @@ def process_single_link(channel_base,channel_type,d):
     phi_rad = [np.radians(phi_deg[n]) for n in range(N)]
     theta_rad = [np.radians(theta_deg[n]) for n in range(N)]
     sca1_xyz_co = channel.scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad)
-    subarray_v_qy_qz = channel.calc_anntena_xyz(lam, V, Q)
-    # subarray_v_qy_qz = channel.calc_anntena_xyz_wide(lam, V, Q, S_sub=10*lam)
+    # サブアレー各素子の座標wideversion
+    subarray_v_qy_qz = channel.calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=10)
     dis_sca1_to_anntena = channel.distance_scatter1_to_eachanntena(sca1_xyz_co, subarray_v_qy_qz, N, M, V, Q)
 
     return {
@@ -80,7 +81,7 @@ def process_single_link(channel_base,channel_type,d):
         "subarray_v_qy_qz": subarray_v_qy_qz, "dis_sca1_to_anntena": dis_sca1_to_anntena
     }
 
-save_dir = f"C:/Users/tai20/Downloads/研究データ/Data/Mirror/{channel_type}/Scatter1/d={d}"
+save_dir = f"C:/Users/tai20/Downloads/sim_data/Data/Mirror/{channel_type}/Ssub={Ssub_lam}lam/Scatter1/d={d}"
 os.makedirs(save_dir, exist_ok=True)
 if __name__ == '__main__':
     with Pool() as pool:
