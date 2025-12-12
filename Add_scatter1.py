@@ -12,18 +12,7 @@ g_dB = 0
 Q = 64
 V = 12
 
-# 設定
-channel_type = "InF"
-NF_setting = "Near"
-Ssub_lam = 10
-d= 30
-
-
-
-
-# ベースのチャネル情報を取得
-Base = np.load(f"C:/Users/tai20/Downloads/sim_data/Data/Base_{channel_type}.npy", allow_pickle=True)
-def process_single_link(channel_base,channel_type,d):
+def Add_Scatter1(channel_base,channel_type,d):
     L_AOD = channel_base['L_AOD']
     L_AOA = channel_base['L_AOA']
     chi = channel_base['chi']
@@ -67,9 +56,9 @@ def process_single_link(channel_base,channel_type,d):
     theta_rad = [np.radians(theta_deg[n]) for n in range(N)]
     sca1_xyz_co = channel.scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad)
     # サブアレー各素子の座標wideversion
-    subarray_v_qy_qz = channel.calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=10)
+    subarray_v_qy_qz = channel.calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam)
     dis_sca1_to_anntena = channel.distance_scatter1_to_eachanntena(sca1_xyz_co, subarray_v_qy_qz, N, M, V, Q)
-
+    phi_deg_v, theta_deg_v = channel.calc_each_subarray_AOD_EOD(N, M, phi_deg, theta_deg, V, Q)
     return {
         "L_AOD": L_AOD, "L_AOA": L_AOA, "chi": chi, "N": N, "M": M, "Z": Z, "U": U,
         "rho": rho, "tau": tau, "beta": beta, "phi_mean_AOD": phi_mean_AOD, "varphi_mean_AOA": varphi_mean_AOA,
@@ -78,14 +67,22 @@ def process_single_link(channel_base,channel_type,d):
         "Pr": Pr, "Pr_each_career": Pr_each_career, "t_nm": t_nm, "P": P, "Pi": Pi,
         "P_each_career": P_each_career, "Pi_each_career": Pi_each_career,
         "r_dash": r_dash, "r": r, "R": R, "sca1_xyz_co": sca1_xyz_co,
-        "subarray_v_qy_qz": subarray_v_qy_qz, "dis_sca1_to_anntena": dis_sca1_to_anntena
+        "subarray_v_qy_qz": subarray_v_qy_qz, "dis_sca1_to_anntena": dis_sca1_to_anntena,
+        "phi_deg_v": phi_deg_v, "theta_deg_v": theta_deg_v
     }
 
-save_dir = f"C:/Users/tai20/Downloads/sim_data/Data/Mirror/{channel_type}/Ssub={Ssub_lam}lam/Scatter1/d={d}"
-os.makedirs(save_dir, exist_ok=True)
-if __name__ == '__main__':
-    with Pool() as pool:
-        args = [(channel_base, channel_type, d) for channel_base in Base.tolist()]
-        result = pool.starmap(process_single_link, args)
+# 設定
+channel_type = "InF"
+NF_setting = "Near"
+Ssub_lam = 10
 
-    np.save(f"{save_dir}/Scatter1.npy", result)
+# ベースのチャネル情報を取得
+Base = np.load(f"C:/Users/tai20/Downloads/sim_data/Data/Base_{channel_type}.npy", allow_pickle=True)
+print(Base)
+for d in range(5, 31, 5):
+    result = Add_Scatter1(Base, channel_type, d)
+#     # 以下保存部分
+#     save_dir = f"C:/Users/tai20/Downloads/sim_data/Data/Mirror/{channel_type}/Ssub={Ssub_lam}lam/Scatter1/d={d}"
+#     os.makedirs(save_dir, exist_ok=True)
+#     np.save(f"{save_dir}/Scatter1.npy", result)
+#     print(f'{channel_type}: d={d} done')

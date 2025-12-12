@@ -8,6 +8,11 @@ from matplotlib.colors import Normalize
 import opt_einsum as oe
 import numba
 from numba import njit, prange
+from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import re
+import unicodedata
 
 # step1　距離を設定
 def define_d(d_min=5,d_max=30):
@@ -24,6 +29,7 @@ def define_chi(setting):
     elif setting == 'InF':
         chi = np.random.normal(0, 4.0)
     return (chi)
+
 # step2 環境に依存する、全体の電力を計算
 def calc_Pr(lam, d, chi, Pt=10, g_dB=0, setting='InH', do=1):
     # 環境に依る各パラメータを設定
@@ -60,7 +66,7 @@ def calc_L(L_AOD_max=2, L_AOA_max=2, setting='InH'):
         L_AOA = rd.randint(1,L_AOA_max)
     elif setting == 'InF':
         L_AOD = rd.poisson(1.8) + 1
-        L_AOD = rd.poisson(1.9) + 1
+        L_AOA = rd.poisson(1.9) + 1
 
     return(L_AOD, L_AOA)
 
@@ -130,9 +136,6 @@ def cluster_excess_delays(rho, N, M, setting):
         delta_tau = np.sort(tau_dash_dash) - np.min(tau_dash_dash)
         tau[0] = 0
         tau[n] = tau[n-1] + rho[n-1][-1] + delta_tau[n] + MTI
-        print(n, M[n-1])
-        print('rho[n][M[n]-1]',rho[n-1][-1])
-        print('delta_tau', delta_tau)
 
     return(tau)
 
@@ -509,19 +512,29 @@ def define_b_verphi_eta(N, M, eta_rad):
     return(b_varphi_eta)
 
 # ビーム割り当て用のaを設定
-def define_a(V, N, M, phi_rad, theta_rad):
+def define_a(V, N, M, phi_rad, theta_rad, NF_setting):
     a = np.zeros((V, N, max(M)))
     zeta = define_zeta(V)
-    for v in range(V):
-        for n in range(N):
-            for m in range(M[n]):
-                diff = (phi_rad[n][m] - zeta[v] + math.pi) % (2*math.pi) - math.pi
-                if abs(diff) > math.pi/2:  # 背面
-                    a[v][n][m] = 0
-                else:                      # 前面
-                    a[v][n][m] = 2.282*np.cos(theta_rad[n][m]) * \
-                                np.sin((math.pi/2)*np.cos(theta_rad[n][m]) * np.cos(diff))
-                
+    if NF_setting == 'Far':
+        for v in range(V):
+            for n in range(N):
+                for m in range(M[n]):
+                    diff = (phi_rad[n][m] - zeta[v] + math.pi) % (2*math.pi) - math.pi
+                    if abs(diff) > math.pi/2:  # 背面
+                        a[v][n][m] = 0
+                    else:                      # 前面
+                        a[v][n][m] = 2.282*np.cos(theta_rad[n][m]) * \
+                                    np.sin((math.pi/2)*np.cos(theta_rad[n][m]) * np.cos(diff))
+    elif NF_setting == 'Near':
+        for v in range(V):
+            for n in range(N):
+                for m in range(M[n]):
+                    diff = (phi_rad[v][n][m] - zeta[v] + math.pi) % (2*math.pi) - math.pi
+                    if abs(diff) > math.pi/2:  # 背面
+                        a[v][n][m] = 0
+                    else:                      # 前面
+                        a[v][n][m] = 2.282*np.cos(theta_rad[v][n][m]) * \
+                                    np.sin((math.pi/2)*np.cos(theta_rad[v][n][m]) * np.cos(diff))
     return(a)
 
 # 各アンテナの原点においての複素振幅を計算
@@ -721,9 +734,9 @@ def fast_dot_einsum_optimized(DFT_weight, amp):
 #     P_sub_dash_dBm = 10 * np.log10(abs(P_sub_dash))
 #     return P_sub_dash_dBm
 
-def near_Power_inc_noise(V,Q,f,DFT_weight,complex_Amp_at_each_antena,n_k_v):
+def near_Power_inc_noise(V,Q,K,DFT_weight,complex_Amp_at_each_antena,n_k_v):
     # 近傍界　励振後のv番目のサブアレーの出力(複素振幅) 27
-    a_near = np.zeros((V,Q,Q,len(f)), dtype=complex)
+    a_near = np.zeros((V,Q,Q,K), dtype=complex)
     a_near = fast_dot_einsum(DFT_weight, complex_Amp_at_each_antena)
     # 近傍領域の信号成分＋雑音
     a_near_dash = np.zeros_like(a_near)
@@ -974,8 +987,79 @@ def noise_dash_dash(U):
     n_dash_dash = real_part + 1j * imag_part
     return n_dash_dash
 
+def calc_each_subarray_AOD_EOD(N, M, sca1_xyz_co, subarray_v_qy_qz, V):
+    # V × N の入れ子構造（各要素は長さ M[n] の 1D 配列）
+    phi_deg_v   = np.zeros(V, dtype=object)
+    theta_deg_v = np.zeros(V, dtype=object)
+
+    for v in range(V):
+        # v番目サブアレーの代表位置（全素子の平均）を基準にする
+        sub_center = subarray_v_qy_qz[v].mean(axis=(0, 1))  # shape (3,)
+        sx, sy, sz = sub_center
+
+        # vごとに N 個のクラスタ分の配列を確保（ここは n ループの外！）
+        phi_deg_v[v]   = [np.zeros(M[i]) for i in range(N)]
+        theta_deg_v[v] = [np.zeros(M[i]) for i in range(N)]
+
+        for n in range(N):
+            for m in range(M[n]):
+                px, py, pz = sca1_xyz_co[n][m]
+
+                dx = px - sx
+                dy = py - sy
+                dz = pz - sz
+                r = np.sqrt(dx**2 + dy**2 + dz**2)
+
+                # 方位角 φ_v
+                phi_deg_v[v][n][m] = np.degrees(np.arctan2(dy, dx))
+
+                # 仰角 θ_v
+                theta_deg_v[v][n][m] = np.degrees(np.arcsin(dz / r))
+
+    return phi_deg_v, theta_deg_v
+
 #########################################################################################################
 def save_to_npy(file_name, data):
     # npyファイルに保存
     np.save(file_name, data)
     print(f"data have been saved to {file_name}")
+    
+
+# グラフを保存する関数
+def _sanitize_title(title: str) -> str:
+    """ファイル名に使えない/使いづらい文字を安全化。"""
+    t = unicodedata.normalize("NFKC", str(title)).strip()
+    t = re.sub(r'[\\/:*?"<>|]+', "", t)
+    t = re.sub(r"\s+", " ", t)
+    t = t.replace(" ", "_").strip("._")
+    return t if t else "Figure"
+
+def save_current_fig_pdf(title: str, mode="both") -> Path:
+    """
+    mode: "png"（普段） or "pdf"（論文用） or "both"
+    ファイル名: YYMMDD_タイトル_HHMM.pdf
+    保存先: C:/Users/tai20/Downloads/sim_data/Figures
+    """
+
+    tz = ZoneInfo("Asia/Tokyo")
+    now = datetime.now(tz)
+    date_str = now.strftime("%y%m%d")   # 例: 251105
+    time_str = now.strftime("%H%M")     # 例: 1342（時分）
+
+    safe_title = _sanitize_title(title)
+
+    out_dir = Path(r"C:/Users/tai20/Downloads/sim_data/Figures")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = f"{date_str}_{safe_title}_{time_str}"
+
+    if mode in ("png", "both"):
+        plt.gcf().savefig(out_dir / f"{base}.png", format="png", bbox_inches="tight", dpi=600)
+    if mode in ("pdf", "both"):
+        plt.gcf().savefig(out_dir / f"{base}.pdf", format="pdf", bbox_inches="tight", dpi=300)
+    
+    print(f"Saved ({mode}) → {out_dir / base}")
+    return out_dir / f"{base}.pdf"
+
+
+
+

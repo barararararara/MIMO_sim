@@ -38,11 +38,30 @@ def transform_angle_to_numpy(phi_deg, theta_deg, varphi_deg, eta_deg, N, M):
         
     return phi_rad_tmp, theta_rad_tmp, varphi_rad_tmp, eta_rad_tmp
 
+def valid_v_indices_from_BA(Beam_allocation, i, w):
+    """
+    Beam_allocation[i, f(=3), w, ae(=2), v(=4)]
+    aeの両方が -100 じゃなければ「その v(=face*4 + idx) は使用中」とみなす。
+    返り値: valid_v (np.ndarray[int])  ← グローバル v (0..11)
+    """
+    valid_v = []
+    for face in range(3):
+        for idx in range(4):
+            pa = Beam_allocation[i, face, w, 0, idx]
+            pe = Beam_allocation[i, face, w, 1, idx]
+            if (pa != -100) and (pe != -100):
+                v = face * 4 + idx
+                valid_v.append(v)
+    return np.array(valid_v, dtype=int)
+
 # チャネル行列計算関数
-def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, NF_setting, Ssub_lam):
-    h_tru_list = []
-    h_est_list = []
+def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, NF_setting, Ssub_lam, NS):
     V = 12
+    W = 12
+    
+    # 1) 返す器を最初に作る
+    h_tru_obj = np.empty((1000, W), dtype=object)
+    h_est_obj = np.empty((1000, W), dtype=object)
     
     # サブアレーの各素子の座標を取得
     # subarray_coordinates_v_qy_qz = np.load('C:/Users/tai20/Downloads/NYUSIMchannel_shelter/subarray_coordinates_Q64.npy')
@@ -52,6 +71,7 @@ def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, N
     subarray_coordinates_v_qy_qz = channel.calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam)
     x = subarray_coordinates_v_qy_qz[:,0,0,0]
     y = subarray_coordinates_v_qy_qz[:,0,0,1]
+    
     for Channel_number in range(1000):
         N = channel_data[Channel_number]["N"]
         M = channel_data[Channel_number]["M"]
@@ -124,9 +144,8 @@ def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, N
         g_DD_pape = np.zeros((V, N, max(M)), dtype=np.complex64)
         invalid_indices = []  # vの削除対象インデックスを格納するリスト
 
-        h_u_v_k = np.zeros((W,U,V), dtype=complex)
-        h_u_v_k_est = np.zeros((W,U,V), dtype=complex)
-        n_dash = channel.noise_u_v_k(U,V)
+        n_dash_full = channel.noise_u_v_k(U, V)  # フルサイズを保持（後で毎回切る）
+        
         for w in range(W):            
             invalid_indices = []  # 各wごとに初期化
             v = 0  # v をループ内で一意に管理
@@ -134,28 +153,30 @@ def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, N
                 for array in range(4):
                     pa = beam_allocation[Channel_number,face, w, 0, array]
                     pe = beam_allocation[Channel_number,face, w, 1, array]
-                    if pa == -1 and pe == -1:
+                    if pa == -100 and pe == -100:
                         invalid_indices.append(v)  # 削除対象のvを記録
                         # print(f"v={v} は削除されます。")
                     else:
                         w_DD_pape[v,:,:] = channel.DFT_weight_calc_pape(Q, pa, pe)
                         g_DD_pape[v,:,:] = channel.g_dd_depend_on_pape(N, M, phi_rad, theta_rad, zeta, Q, v, pa, pe)
-                        # print('v, pa, pe', v, pa, pe)
-                    
                     v += 1  # ループごとに v を増加
 
             # vの次元を削除して V' にする
-            valid_indices = np.setdiff1d(np.arange(V), invalid_indices)  # 残すvのインデックス
-            w_DD_pape_reduced = w_DD_pape[valid_indices]  # w_DD_pape の v 次元を縮小
-            n_dash = n_dash[:,valid_indices,:]
+            valid = np.setdiff1d(np.arange(V), invalid_indices)  # 残すvのインデックス
+            w_DD_pape_red = w_DD_pape[valid]      # (V′,Q,Q)
+            a_red = a[valid]                      # (V′,U,Q,Q)
+            n_dash_w = n_dash_full[:, valid, :]
 
 ###########################################################################################################################
 # 近傍界チャネル
             if NF_setting == 'Near':
-                a = a[valid_indices]
-                h_u_v_k[w] = np.einsum('vyz,vuyz->uv', w_DD_pape_reduced, a, optimize=True)
-                h_u_v_k_est[w] = h_u_v_k[w] + n_dash[:,:,0] / np.sqrt(Pu/2000)
-                
+                H_w = np.einsum('vyz,vuyz->uv', w_DD_pape_red, a_red, optimize=True)  # (U, V′)
+                if NS == 'Wo_NS':
+                    H_w_est = H_w + n_dash_w[:, :, 0] / np.sqrt(Pu/2000)
+                elif NS == 'W_NS':
+                    H_w_est = H_w + (n_dash_w[:, :, :10].sum(axis=2)/10) / np.sqrt(Pu/2000)
+                h_tru_obj[Channel_number, w] = H_w
+                h_est_obj[Channel_number,  w] = H_w_est
 ############################################################################################################################################
 # 遠方界チャネル
             elif NF_setting == 'Far':
@@ -198,19 +219,23 @@ def Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, N
                             * np.cos(eta_rad[np.newaxis, np.newaxis, :, :])  # (1, 1, N, M)
                             * np.sin(varphi_rad[np.newaxis, np.newaxis, :, :]))  # (1, 1, N, M)
                             )
+                
                 h_dash_far = np.squeeze(h_dash_far, axis=(0, 1))
                 # M[n] を超える部分を 0 にする
                 for n in range(N):
                     h_dash_far[:, :, n, M[n]:] = 0  # M[n] 以降の次元を 0 にする
-                    
+                
+                h_far = np.sum(h_dash_far, (2,3))
+                H_compact = h_far[:, valid] 
+                if NS == 'Wo_NS':
+                    H_est_compact = H_compact + n_dash_w[:, :, 0] / np.sqrt(Pu/2000)
+                elif NS == 'W_NS':
+                    H_est_compact = H_compact + (n_dash_w[:, :, :10].sum(axis=2)/10) / np.sqrt(Pu/2000)
                 # 全てのマルチパスの寄与
-                h_u_v_k[w] = np.sum(h_dash_far, (2,3))
-                h_u_v_k_est[w] = h_u_v_k[w] + n_dash[:,:,0] / np.sqrt(Pu / 2000)
+                h_tru_obj[Channel_number, w] = H_compact
+                h_est_obj[Channel_number, w] = H_est_compact
 
-        h_tru_list.append(h_u_v_k)
-        h_est_list.append(h_u_v_k_est)
-    
-    return h_tru_list, h_est_list
+    return h_tru_obj, h_est_obj
 
 
 # パラメータ設定
@@ -229,21 +254,20 @@ W =12
 Method = 'Mirror'
 channel_type = 'InH'
 Ssub_lam = 0  # サブアレー間隔(単位: 波長)
-NF_setting = 'Near'
-d=5 #距離設定
+NS = 'W_NS'
+NF_setting = 'Far'
 
-for d in range(5, 31, 5):
-    load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam"
-    channel_data = np.load(f"{load_dir}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
-    beam_allocation  = np.load(f'{load_dir}/Beamallocation/{NF_setting}/d={d}.npy', allow_pickle=True)
+d=30
+load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/{NS}"
+channel_data = np.load(f"{load_dir}/Scatter1/d={d}/Scatter1.npy", allow_pickle=True)
+beam_allocation  = np.load(f'{load_dir}/Beamallocation/{NF_setting}/d={d}.npy', allow_pickle=True)
 
-    h_tru_list, h_est_list = Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, NF_setting, Ssub_lam)
+h_tru_obj, h_est_obj = Channel_Matrix_Calculation(channel_data, beam_allocation, channel_type, d, NF_setting, Ssub_lam, NS)
 
-    save_dir =  f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/Channel_Matrix/{NF_setting}/"
-
-    os.makedirs(save_dir + "/H_tru", exist_ok = True)
-    np.save(f"{save_dir}/H_tru/d={d}.npy", h_tru_list)
-
-    os.makedirs(save_dir + "/H_est", exist_ok = True)
-    np.save(f"{save_dir}/H_est/d={d}.npy", h_est_list) 
-    print(f'{NF_setting}:{d} has done')
+# 保存部分
+save_dir =  f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/{NS}/Channel_Matrix/{NF_setting}"
+os.makedirs(save_dir + "/H_tru", exist_ok = True)
+np.save(f"{save_dir}/H_tru/d={d}.npy", h_tru_obj)
+os.makedirs(save_dir + "/H_est", exist_ok = True)
+np.save(f"{save_dir}/H_est/d={d}.npy", h_est_obj) 
+print(f'Ssub = {Ssub_lam}λ, {NF_setting}:{d} has done')

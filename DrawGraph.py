@@ -25,15 +25,16 @@ def oresen(load_dir):
 
 Method = 'Mirror'
 channel_type = 'InH'
-Ssub_lam = 10  # サブアレー間隔(単位: 波長)
+Ssub_lam = 0  # サブアレー間隔(単位: 波長)
+NS = 'W_NS'
 NF_setting = 'Near'
-load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/Channel_Capacity/{NF_setting}"
+load_dir = f"C:/Users/tai20/Downloads/sim_data/Data/{Method}/{channel_type}/Ssub={Ssub_lam}lam/{NS}/Channel_Capacity/{NF_setting}"
 # 複数比較（例）
 series = [
-    {"label": "Mirror Near Ssub=10λ", "load_dir": load_dir},
-    {"label": "Far Ssub=10λ",  "load_dir": load_dir.replace("/Near", "/Far")},
-    {"label": "Mirror Near Ssub=0",  "load_dir": load_dir.replace("10", "0")},
-    {"label": "Far Ssub=0",  "load_dir": load_dir.replace("10", "0").replace("/Near", "/Far")}
+    {"label": f"Mirror Near Ssub={Ssub_lam}λ", "load_dir": load_dir},
+    {"label": f"Far Ssub={Ssub_lam}λ",  "load_dir": load_dir.replace("/Near", "/Far")},
+    # {"label": "Mirror Near Ssub=10",  "load_dir": load_dir.replace("10", "0")},
+    # {"label": "Far Ssub=10",  "load_dir": load_dir.replace("10", "0").replace("/Near", "/Far")}
 ]
 # —— 複数シリーズを重ね描き（任意）：load_dirごとにラベル指定して重ねる——
 def plot_oresen_multi(series, ylim=(0,60), xlabel="BS-UE Distance d [m]",
@@ -60,8 +61,9 @@ def plot_oresen_multi(series, ylim=(0,60), xlabel="BS-UE Distance d [m]",
         plt.savefig(save_pdf, format='pdf')
     plt.show()
 
-plot_oresen_multi(series, title=f"{channel_type}")
+plot_oresen_multi(series, title=f"{channel_type} W_NS")
 
+exit()
 
 def _load_ordered_eigs(npy_path, K):
     """
@@ -161,7 +163,6 @@ def plot_eig_order_cdf(load_dir, d=5, K=5, which=("True","Est"), use_log10=True,
 # plot_eig_order_cdf(load_dir, d=5, K=5, which=("True","Est"), use_log10=True, title=f"{channel_type}")
 
 plot_eig_order_cdf(load_dir, title=f"{channel_type} CDF")
-exit()
 """
 r_5 = np.zeros((1000), dtype=object)
 r_10 = np.zeros((1000), dtype=object)

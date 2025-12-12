@@ -134,7 +134,7 @@ def Beam_Allocation_function(channel_type, d, NF_setting, W, Power):
     df_top_per_v = pd.concat(rows_per_v, ignore_index=True)
 
     return beam_allocation, df_sorted_all, df_missing_all, df_top_all, df_top_per_v
-    
+
 
 # パラメータ設定
 Q = 64
