@@ -1038,7 +1038,7 @@ def save_current_fig_pdf(title: str, mode="both") -> Path:
     """
     mode: "png"（普段） or "pdf"（論文用） or "both"
     ファイル名: YYMMDD_タイトル_HHMM.pdf
-    保存先: C:/Users/tai20/Downloads/sim_data/Figures
+    保存先: "C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures"
     """
 
     tz = ZoneInfo("Asia/Tokyo")
@@ -1048,7 +1048,7 @@ def save_current_fig_pdf(title: str, mode="both") -> Path:
 
     safe_title = _sanitize_title(title)
 
-    out_dir = Path(r"C:/Users/tai20/Downloads/sim_data/Figures")
+    out_dir = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures")
     out_dir.mkdir(parents=True, exist_ok=True)
     base = f"{date_str}_{safe_title}_{time_str}"
 
