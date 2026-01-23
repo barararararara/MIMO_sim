@@ -401,6 +401,31 @@ def scatter1_xyz_cordinate(N, M, r, phi_rad, theta_rad):
 
     return xyz_coordinates
 
+def Mirror_UE_positions(d, N, M, rho, tau, phi_rad, theta_rad):
+    R = [np.zeros(M[i]) for i in range(N)]
+    for n in range(N):
+        for m in range(M[n]):
+            R[n][m] = d + 0.3*(tau[n] + rho[n][m])
+    R[0][0] = d
+    
+    max_M = max(M)
+    MUE_coordinates = np.zeros((N, max_M, 3))
+
+    for n in range(N):
+        m_len = M[n]
+        theta_n = np.asarray(theta_rad[n][:m_len])
+        phi_n = np.asarray(phi_rad[n][:m_len])
+
+        cos_theta = np.cos(theta_n)
+        x = R[n] * cos_theta * np.cos(phi_n)
+        y = R[n] * cos_theta * np.sin(phi_n)
+        z = R[n] * np.sin(theta_n)
+
+        MUE_coordinates[n, :m_len, 0] = x
+        MUE_coordinates[n, :m_len, 1] = y
+        MUE_coordinates[n, :m_len, 2] = z
+    return R, MUE_coordinates
+
 # サブアレーの各素子の座標を計算
 def calc_anntena_xyz(lam, V, Q):
     L = (lam * (Q + 1) / 2) * V / 3
@@ -476,16 +501,15 @@ def calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=0):
         
     return subarray_v_qy_qz
 
-# 散乱体１と各素子の距離を計算 もっときれいに書けそう
-def distance_scatter1_to_eachanntena(xyz_coordinates, subarray_v_qy_qz, N, M, V, Q):
+# ある座標と各素子の距離を計算 もっときれいに書けそう
+def distance_to_eachanntena(xyz_coordinates, subarray_v_qy_qz, N, M, V, Q):
     max_M = np.max(M)
     r_qy_qz = np.zeros((V, N, max_M, Q, Q), dtype=np.float64)
 
     for n in range(N):
         for m in range(M[n]):
-            # (V, Q, Q, 3) - (1, 1, 1, 3) → (V, Q, Q, 3)
             diffs = subarray_v_qy_qz - xyz_coordinates[n, m][None, None, None, :]
-            dists = np.sqrt(np.sum(diffs ** 2, axis=-1))  # → (V, Q, Q)
+            dists = np.sqrt(np.sum(diffs ** 2, axis=-1))
             r_qy_qz[:, n, m, :, :] = dists
 
     return r_qy_qz
@@ -590,8 +614,8 @@ def complex_Amp_at_each_antena(f, V, Q, N, M, distance_sca_to_anntena, complex_A
 
     return a_v_qyqz
 
-# 第１散乱体での複素振幅を計算
-def complex_Amp_at_scatter1(N, M, f, r, complex_Amp_at_O):
+# ある地点の複素振幅を計算
+def complex_Amp_at_there(N, M, f, r, complex_Amp_at_O):
     complex_Amp_at_scatter1 = np.zeros((N,max(M),len(f)), dtype=complex)
     tau1 = [np.zeros(M[i]) for i in range(N)]
     for n in range(N):
@@ -613,7 +637,6 @@ def DFT_weight_calc(Q):
     return(w_DD)
 
 def DFT_weight_calc_pape(Q, pa, pe):
-    w_DD = np.array((Q, Q), dtype=complex)
     indices = np.arange(Q)
     qy, qz = np.meshgrid(indices, indices, indexing="ij")
     w_DD = (1 / Q) * np.exp(-1j * np.pi * qy * (-Q + 2 * pa + 2) / Q) \
