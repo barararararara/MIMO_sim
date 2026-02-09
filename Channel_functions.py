@@ -465,40 +465,49 @@ def calc_anntena_xyz(lam, V, Q):
 
 # サブアレー間隔を広げるようなver
 def calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=0):
-    Ssub = Ssub_lam * lam
-    L = (lam * (Q + 1) / 2) * V / 3 + (V/3 - 1) * Ssub
-    subarray_v_qy_qz = np.zeros((V, Q, Q, 3))
+    """
+    条件：
+    - (x_v, y_v) は qy=0 素子の座標（先生メモ準拠）
+    - サブアレー両端に λ/2 の余白あり
+      → サブアレー間ステップ = (Q+1)*λ/2 + Ssub
+    - 面内(qy方向)には余白を直接足さない
+    """
+    S_sub = Ssub_lam * lam
+    p = lam/2
+    Vf = V // 3
+    L = (Q+1) * p * Vf + (Vf-1)*S_sub
 
-    qy_idx, qz_idx = np.meshgrid(np.arange(Q), np.arange(Q), indexing='ij')
+    subarray_v_qy_qz = np.zeros((V, Q, Q, 3), dtype=float)
+    qy_idx, qz_idx = np.meshgrid(np.arange(Q), np.arange(Q), indexing="ij")
+    z = lam/2 + qz_idx * p
 
     for v in range(V):
-        if 0 <= v < V / 3:
-            x = L / (2 * math.sqrt(3))
-            y_base = -L / 2 + lam / 2 * (1 + (Q + 1)) * v + Ssub * v
-            y = y_base + qy_idx * lam / 2
-            z = qz_idx * lam / 2
-            coords = np.stack([np.full_like(y, x), y, z], axis=-1)
+        if 0 <= v < Vf:
+            # -------- 0°面（式(11)）--------
+            x_v = L / (2 * math.sqrt(3))
+            y_v = -L/2 + p*(1+(Q+1)*v) + S_sub*v
+            x_vqyqz = x_v * np.ones_like(qy_idx)
+            y_vqyqz = y_v  + qy_idx * p
+            coords = np.stack([x_vqyqz, y_vqyqz, z], axis=-1)
 
-        elif V / 3 <= v < 2 * V / 3:
-            offset = v - V / 3
-            x = L / (2 * math.sqrt(3)) - math.sqrt(3) / 2 * (lam / 2 * (1 + (Q + 1) * offset) + Ssub * offset)
-            y = L / 2 - 0.5 * lam / 2 * (1 + (Q + 1) * offset) - 1/2 * Ssub * offset
-            x_shift = -math.sqrt(3) * qy_idx * lam / 4
-            y_shift = -qy_idx * lam / 4
-            z = qz_idx * lam / 2
-            coords = np.stack([x + x_shift, y + y_shift, z], axis=-1)
+        elif Vf <= v < 2*Vf:
+            # -------- 120°面（式(12)）--------
+            x_v = L/(2*math.sqrt(3)) - (math.sqrt(3)/2) * (p*(1 + (Q+1)*(v - Vf)) + S_sub*(v - Vf))
+            y_v = L/2               - 0.5 * p * (1 + (Q+1)*(v - Vf)) - 1/2*S_sub*(v - Vf)
+            x_vqyqz = x_v - math.sqrt(3)/2 * p * qy_idx  
+            y_vqyqz = y_v  - qy_idx * p/2
+            coords = np.stack([x_vqyqz, y_vqyqz, z], axis=-1)
 
         else:
-            offset = v - 2 * V / 3
-            x = -L / math.sqrt(3) + math.sqrt(3) / 2 * lam / 2 * (1 + (Q + 1) * offset) + math.sqrt(3)/2 * Ssub * offset
-            y = -0.5 * lam / 2 * (1 + (Q + 1) * offset) - 1/2 * Ssub * offset
-            x_shift = math.sqrt(3) * qy_idx * lam / 4
-            y_shift = -qy_idx * lam / 4
-            z = qz_idx * lam / 2
-            coords = np.stack([x + x_shift, y + y_shift, z], axis=-1)
+            # -------- 240°面（式(13)）--------
+            x_v = -L/math.sqrt(3) + (math.sqrt(3)/2) * (p*(1 + (Q+1)*(v - 2*Vf)) + S_sub*(v - 2*Vf))
+            y_v = -1/2 * p * (1 + (Q+1)*(v - 2*Vf)) - 1/2*S_sub*(v - 2*Vf)
+            x_vqyqz = x_v + math.sqrt(3)/2 * p * qy_idx
+            y_vqyqz = y_v  - qy_idx * p/2
+            coords = np.stack([x_vqyqz, y_vqyqz, z], axis=-1)
 
         subarray_v_qy_qz[v] = coords
-        
+
     return subarray_v_qy_qz
 
 # ある座標と各素子の距離を計算 もっときれいに書けそう
@@ -592,7 +601,7 @@ def calc_complex_Amp_at_O(f, V, N, M, Amp_per_career, beta, tau_nm, b_varphi_eta
     return complex_Amp_at_O
 
 # v番目のサブアレーのqy,qz番目のアンテナ素子での周波数fkでの複素振幅を求める
-def complex_Amp_at_each_antena(f, V, Q, N, M, distance_sca_to_anntena, complex_Amp_at_scatter1, a_varphi_theta):
+def complex_Amp_at_each_antena(f, V, Q, N, M, distance_sca_to_anntena, complex_Amp_at_scatter1, a_phi_theta):
     # tau_nm_v_qyqz は、distance_sca_to_anntena / 0.3 としてベクトル化して一度に計算
     tau_nm_v_qyqz = np.zeros((V,N,max(M),Q,Q))
     tau_nm_v_qyqz = distance_sca_to_anntena / 0.3 / 1e9 #ここに限っては、fをHzで初期化しているからe9はok
@@ -607,7 +616,7 @@ def complex_Amp_at_each_antena(f, V, Q, N, M, distance_sca_to_anntena, complex_A
                 for qy in range(Q):
                     for qz in range(Q):
                         # tau_nm_v_qyqz と f[k] の計算をベクトル化して一括処理
-                        a_nm_v_qyqz[v, n, m, :, qy, qz] = complex_Amp_at_scatter1[n,m,:] * a_varphi_theta[v][n][m] * np.exp(-2j * np.pi * f[:] * tau_nm_v_qyqz[v, n, m, qy, qz])
+                        a_nm_v_qyqz[v, n, m, :, qy, qz] = complex_Amp_at_scatter1[n][m] * a_phi_theta[v][n][m] * np.exp(-2j * np.pi * f[:] * tau_nm_v_qyqz[v, n, m, qy, qz])
 
     # n と m の次元について合計（この処理は axis=(1, 2) で一括）
     a_v_qyqz = np.sum(a_nm_v_qyqz, axis=(1, 2))  # (V, len(f), Q, Q)
@@ -997,10 +1006,10 @@ def calc_complex_Amp_at_O_u(f, U, N, M, Amp_per_career_desital, beta, tau_nm, b_
     
     return complex_Amp_at_O
 
-def noise_u_v_k(U, V):
-    # (V, Q, Q, 2000) サイズの複素乱数を生成
-    real_part = np.random.normal(0, 1.778 * 1e-6, (U,V, 2000))
-    imag_part = np.random.normal(0, 1.778 * 1e-6, (U,V, 2000))
+def noise_dash(U, V):
+    # (V, V, 10) サイズの複素乱数を生成
+    real_part = np.random.normal(0, 2.512 * 1e-6, (U,V,10))
+    imag_part = np.random.normal(0, 2.512 * 1e-6, (U,V,10))
     n_u_k_v = real_part + 1j * imag_part
     return n_u_k_v
 
@@ -1057,31 +1066,45 @@ def _sanitize_title(title: str) -> str:
     t = t.replace(" ", "_").strip("._")
     return t if t else "Figure"
 
-def save_current_fig_pdf(title: str, mode="both") -> Path:
-    """
-    mode: "png"（普段） or "pdf"（論文用） or "both"
-    ファイル名: YYMMDD_タイトル_HHMM.pdf
-    保存先: "C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures"
-    """
+from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import matplotlib.pyplot as plt
+import pickle
 
+def save_current_fig(title: str, mode="both", folder=None) -> Path:
+    """
+    mode: "png" / "pdf" / "fig" / "both"
+    """
     tz = ZoneInfo("Asia/Tokyo")
     now = datetime.now(tz)
-    date_str = now.strftime("%y%m%d")   # 例: 251105
-    time_str = now.strftime("%H%M")     # 例: 1342（時分）
+    date_str = now.strftime("%y%m%d")
+    time_str = now.strftime("%H%M")
 
     safe_title = _sanitize_title(title)
 
     out_dir = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures")
+    if folder is not None:
+        out_dir = out_dir / folder
     out_dir.mkdir(parents=True, exist_ok=True)
+
     base = f"{date_str}_{safe_title}_{time_str}"
+    fig = plt.gcf()
 
     if mode in ("png", "both"):
-        plt.gcf().savefig(out_dir / f"{base}.png", format="png", bbox_inches="tight", dpi=600)
+        fig.savefig(out_dir / f"{base}.png",
+                    bbox_inches="tight", dpi=600)
+
     if mode in ("pdf", "both"):
-        plt.gcf().savefig(out_dir / f"{base}.pdf", format="pdf", bbox_inches="tight", dpi=300)
-    
+        fig.savefig(out_dir / f"{base}.pdf",
+                    bbox_inches="tight")
+
+    if mode in ("fig", "both"):
+        with open(out_dir / f"{base}.fig.pickle", "wb") as f:
+            pickle.dump(fig, f)
+
     print(f"Saved ({mode}) → {out_dir / base}")
-    return out_dir / f"{base}.pdf"
+    return out_dir / f"{base}"
 
 
 
