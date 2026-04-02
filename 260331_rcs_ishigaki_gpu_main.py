@@ -1,4 +1,4 @@
-# 260205_VTCFallに向けたシミュレーション
+# 260319_RCS石垣島_ゼロマスキング検討
 import numpy as np
 import math
 import Channel_functions as channel
@@ -20,99 +20,7 @@ f_GHz_val = f_GHz[1000] #中央周波数
 lam = 0.3 / f_GHz #2000個の波長
 c_ns = 0.3 # 光速 m/ns
 
-# シミュレーションシナリオ 251120 正面から到来するシナリオ
 #################################################################################################################
-# サブアレーの位置があっているか確認するプロット用関数
-def plot_subarray_antennas(subarray_v_qy_qz):
-    """
-    subarray_v_qy_qz : shape = (V, Q, Q, 3)
-        [v, qy, qz, coord] でアンテナ座標 (x,y,z) が入っている配列
-    """
-    V, Qy, Qz, coord_dim = subarray_v_qy_qz.shape
-    assert coord_dim == 3, "最後の次元は (x,y,z) の3次元になっている必要があります"
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-
-    # 各サブアレーごとにプロット
-    for v in range(V):
-        # (Qy, Qz, 3) → (Qy*Qz, 3) に reshape
-        xyz = subarray_v_qy_qz[v].reshape(-1, 3)
-        x = xyz[:, 0]
-        y = xyz[:, 1]
-        z = xyz[:, 2]
-
-        ax.scatter(x, y, z, s=10)  # 色は自動に任せる
-
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_zlabel("z")
-    ax.set_title("Subarray antenna positions (3D)")
-
-    # 軸スケールを揃える（立方体で表示）
-    all_xyz = subarray_v_qy_qz.reshape(-1, 3)
-    x_min, y_min, z_min = all_xyz.min(axis=0)
-    x_max, y_max, z_max = all_xyz.max(axis=0)
-    max_range = max(x_max - x_min, y_max - y_min, z_max - z_min) / 2.0
-    x_mid = (x_max + x_min) / 2.0
-    y_mid = (y_max + y_min) / 2.0
-    z_mid = (z_max + z_min) / 2.0
-
-    ax.set_xlim(x_mid - max_range, x_mid + max_range)
-    ax.set_ylim(y_mid - max_range, y_mid + max_range)
-    ax.set_zlim(z_mid - max_range, z_mid + max_range)
-
-    plt.tight_layout()
-    plt.show()
-
-# ビーム割当法１多様性重視の割り当て
-def Beam_allocation_method_1(Power, threshold, test_num):
-    """
-    ビーム割当法1：1,2,3,4位と順に割り当て、ダイバーシティを優先
-    """
-    beam_allocation = np.full((3, 2, 4), -1, dtype=int)  # w削除済み
-    rows_per_v = []
-
-    for v in range(V):
-        valid_mask = Power[v] >= threshold
-        valid_values = Power[v][valid_mask]
-
-        if valid_values.size == 0:
-            df_v = pd.DataFrame([{
-                "Channel": test_num,
-                "v": v,
-                "rank": None,
-                "Power_dBm": None,
-                "pa": None,
-                "pe": None
-            }])
-            rows_per_v.append(df_v)
-            continue
-
-        pa_indices, pe_indices = np.where(valid_mask)
-        candidates = np.stack([valid_values, np.full_like(pa_indices, v), pa_indices, pe_indices], axis=1)
-        top4 = candidates[np.argsort(-candidates[:, 0])][:4]
-
-        df_v = pd.DataFrame(top4, columns=["Power_dBm", "v", "pa", "pe"])
-        df_v.insert(0, "rank", np.arange(1, len(df_v)+1))
-        df_v.insert(0, "Channel", test_num)
-        df_v[["v", "pa", "pe"]] = df_v[["v", "pa", "pe"]].astype("Int64")
-        rows_per_v.append(df_v)
-        
-
-    # 割り当て処理
-    for face in range(3):
-        for k in range(4):
-            v = face * 4 + k
-            df_v = rows_per_v[v]
-            if isinstance(df_v, pd.DataFrame) and df_v["rank"].notnull().any():
-                row = df_v.iloc[k] if k < len(df_v) else None
-                if row is not None and pd.notnull(row["pa"]):
-                    beam_allocation[face, 0, k] = row["pa"]
-                    beam_allocation[face, 1, k] = row["pe"]
-    
-    return beam_allocation, rows_per_v
-
 # ビーム割当法２(各サブアレー最大受信電力)
 def Beam_allocation_method_2(Power, threshold, testch_num=0):
     """
@@ -191,60 +99,6 @@ def transform_angle_to_numpy(phi_deg, theta_deg, varphi_deg, eta_deg, N, M):
         
     return phi_rad_tmp, theta_rad_tmp, varphi_rad_tmp, eta_rad_tmp
 
-# ミューチュアルコヒーレンスを計算する関数二つ
-def mutual_coherence_matrix_from_Gram(G):
-    """
-    G: Gram行列 = H^H H, shape (Nt, Nt)
-
-    戻り値:
-        C: shape (Nt, Nt)
-    """
-    diag = np.real(np.diag(G))
-    diag = np.where(diag <= 0, 1e-15, diag)
-    denom = np.sqrt(np.outer(diag, diag))
-    MC = np.abs(G) / denom
-    return MC
-def mutual_coherence_hi_hj(H: np.ndarray, i: int, j: int) -> float:
-    """
-    i番目の列要素から成る8次元列ベクトルを hi とする。
-    j番目の列要素から成る8次元列ベクトルを hj とする。
-
-    ||hi|| = √(hi^H hi),  ||hj|| = √(hj^H hj)
-    μ_{i,j} = |hi^H hj| / (||hi|| ||hj||)
-
-    Parameters
-    ----------
-    H : np.ndarray
-        下り回線のチャネル行列。想定は shape (8, 4)（複素数OK）。
-    i, j : int
-        列番号（1始まりで渡す想定：i=1..4, j=1..4）
-
-    Returns
-    -------
-    float
-        mutual coherence μ_{i,j}
-    """
-    # --- i番目・j番目の列要素から成る8次元列ベクトルを取り出す ---
-    hi = H[:, i-1]  # shape (8,)
-    hj = H[:, j-1]  # shape (8,)
-
-    # --- ノルム ||hi|| = √(hi^H hi), ||hj|| = √(hj^H hj) ---
-    # hi^H hi は np.vdot(hi, hi) で計算できる（vdotは第1引数を共役にする）
-    norm_hi = np.sqrt(np.vdot(hi, hi))
-    norm_hj = np.sqrt(np.vdot(hj, hj))
-
-    # 0割り防止（ほぼ起きない想定だけど安全に）
-    denom = np.abs(norm_hi) * np.abs(norm_hj)
-    if denom == 0:
-        return 0.0
-
-    # --- μ_{i,j} = |hi^H hj| / (||hi|| ||hj||) ---
-    mu_ij = np.abs(np.vdot(hi, hj)) / denom
-
-    # 実数スカラーとして返す
-    return float(np.real(mu_ij))
-    return (deg + 180) % 360 - 180
-
 # グラム行列の固有値と固有ベクトルを求める関数
 def calc_eigval(H):
     h_norm = H / np.linalg.norm(H, axis=0, keepdims=True)
@@ -302,116 +156,109 @@ def generate_s(Ly):
     return s
 
 # チャネル容量を求める関数(注意!! nearとfarで用いるH_truが異なります！！！！)
-def calc_channel_capacity(H, H_tru, Pt_mW, P_noise_mW):
-    H_val , H_vec = calc_eigval(H)
-    power_allo, Ly = water_filling_ratio(H_val, Pt_mW, P_noise_mW)
-    p_sqrt = np.sqrt(power_allo)
-    p_diag = np.diag(p_sqrt)
+# チャネル容量を求める関数(全サブキャリア平均対応)
+def calc_channel_capacity(H_all, H_tru_all, Pt_mW, P_noise_mW):
+    # もし2次元配列が渡された場合はK=1として扱えるように次元を追加
+    if H_all.ndim == 2:
+        H_all = H_all[:, :, np.newaxis]
+        H_tru_all = H_tru_all[:, :, np.newaxis]
 
-    A = np.sqrt(Pt_mW)*p_diag
-    Te_H = H_vec[:,:Ly]
+    K = H_all.shape[2]
+    C_sum = 0.0
+    Ly_sum = 0.0
 
-    n_dash_dash = channel.noise_dash_dash(U)
-    s = generate_s(Ly)
-    x = Te_H @ A @ s
-    y = H_tru @ x + n_dash_dash
-    
-    N_dash_dash_ly = np.random.normal(0, 1.778e-6, (U,Ly)) + 1j * np.random.normal(0, 1.778e-6, (U,Ly))
-    S = np.eye(Ly)
-    H_eff = H_tru @ Te_H @ S + (N_dash_dash_ly / np.sqrt(Pt_mW))
-    Wr = np.ones((U,Ly), dtype=np.complex128)
-    gamma0 = Pt_mW / P_noise_mW
-    I_Ly = np.identity(Ly)
-    W_MMSE = ( np.linalg.inv(H_eff.conj().T @ H_eff + (Ly / gamma0) * I_Ly) @ H_eff.conj().T ).T
-    
-    Wr = W_MMSE
-    r = Wr.T @ y
-    B = Wr.T @ H_tru @ Te_H @ A
-    S = np.abs(np.diag(B)) ** 2
-    I = np.sum(np.abs(B) ** 2, axis=1) - np.abs(np.diag(B)) ** 2
+    # サブキャリアごとに容量を計算して足し合わせる
+    for k in range(K):
+        H = H_all[:, :, k]
+        H_tru = H_tru_all[:, :, k]
 
-    Rnn = P_noise_mW * Wr.T @ (Wr.T).conj().T
-    N = np.diag(Rnn)
-    C_ly = np.log2(S / (I + N) + 1)
-    C = np.real(np.sum(C_ly))
-    
+        H_val, H_vec = calc_eigval(H)
+        power_allo, Ly = water_filling_ratio(H_val, Pt_mW, P_noise_mW)
+        
+        if Ly == 0:
+            continue
 
-    return C, Ly, H_val
+        p_sqrt = np.sqrt(power_allo)
+        p_diag = np.diag(p_sqrt)
 
-def calc_channel_capacity_SingleLayer(H, H_tru, Pt_mW, P_noise_mW):
-    # 固有値・固有ベクトル（右特異ベクトル）
-    H_val, H_vec = calc_eigval(H)
+        A = np.sqrt(Pt_mW) * p_diag
+        Te_H = H_vec[:, :Ly]
 
-    Ly = 1
-    power_allo = np.array([1.0])           # 全電力を第1層へ
-    A = np.array([[np.sqrt(Pt_mW)]], dtype=np.complex128)
-    Te_H = H_vec[:, :Ly]                   # 第1モードのみ
+        n_dash_dash = channel.noise_dash_dash(U)
+        s = generate_s(Ly)
+        x = Te_H @ A @ s
+        y = H_tru @ x + n_dash_dash
+        
+        N_dash_dash_ly = np.random.normal(0, 1.778e-6, (U, Ly)) + 1j * np.random.normal(0, 1.778e-6, (U, Ly))
+        S = np.eye(Ly)
+        H_eff = H_tru @ Te_H @ S + (N_dash_dash_ly / np.sqrt(Pt_mW))
+        gamma0 = Pt_mW / P_noise_mW
+        I_Ly = np.identity(Ly)
+        W_MMSE = (np.linalg.inv(H_eff.conj().T @ H_eff + (Ly / gamma0) * I_Ly) @ H_eff.conj().T).T
+        
+        Wr = W_MMSE
+        r = Wr.T @ y
+        B = Wr.T @ H_tru @ Te_H @ A
+        S_pow = np.abs(np.diag(B)) ** 2
+        I_pow = np.sum(np.abs(B) ** 2, axis=1) - np.abs(np.diag(B)) ** 2
 
-    n_dash_dash = channel.noise_dash_dash(U)
-    s = generate_s(Ly)
-    x = Te_H @ A @ s
-    y = H_tru @ x + n_dash_dash
+        Rnn = P_noise_mW * Wr.T @ (Wr.T).conj().T
+        N_pow = np.diag(Rnn)
+        C_ly = np.log2(S_pow / (I_pow + N_pow) + 1)
+        C_sum += np.real(np.sum(C_ly))
+        Ly_sum += Ly
+        
+    # 全サブキャリアの平均を返す
+    return C_sum / K, Ly_sum / K, None
 
-    # 受信側（MMSE）も Ly=1 でそのまま
-    N_dash_dash_ly = (np.random.normal(0, 1.778e-6, (U, Ly))+ 1j*np.random.normal(0, 1.778e-6, (U, Ly)))
-    H_eff = H_tru @ Te_H + (N_dash_dash_ly / np.sqrt(Pt_mW))
+def calc_channel_capacity_SingleLayer(H_all, H_tru_all, Pt_mW, P_noise_mW):
+    if H_all.ndim == 2:
+        H_all = H_all[:, :, np.newaxis]
+        H_tru_all = H_tru_all[:, :, np.newaxis]
 
-    gamma0 = Pt_mW / P_noise_mW
-    I_Ly = np.identity(Ly)
-    W_MMSE = (np.linalg.inv(H_eff.conj().T @ H_eff + (Ly / gamma0) * I_Ly) @ H_eff.conj().T).T
+    K = H_all.shape[2]
+    C_sum = 0.0
 
-    Wr = W_MMSE
-    B = Wr.T @ H_tru @ Te_H @ A
-    S_pow = np.abs(np.diag(B)) ** 2
-    I_pow = np.sum(np.abs(B) ** 2, axis=1) - S_pow
+    for k in range(K):
+        H = H_all[:, :, k]
+        H_tru = H_tru_all[:, :, k]
 
-    Rnn = P_noise_mW * Wr.T @ (Wr.T).conj().T
-    N_pow = np.diag(Rnn)
+        # 固有値・固有ベクトル（右特異ベクトル）
+        H_val, H_vec = calc_eigval(H)
 
-    C_ly = np.log2(S_pow / (I_pow + N_pow) + 1)
-    C = float(np.real(np.sum(C_ly)))
+        Ly = 1
+        power_allo = np.array([1.0])           # 全電力を第1層へ
+        A = np.array([[np.sqrt(Pt_mW)]], dtype=np.complex128)
+        Te_H = H_vec[:, :Ly]                   # 第1モードのみ
 
-    return C, Ly, H_val
+        n_dash_dash = channel.noise_dash_dash(U)
+        s = generate_s(Ly)
+        x = Te_H @ A @ s
+        y = H_tru @ x + n_dash_dash
+
+        # 受信側（MMSE）も Ly=1 でそのまま
+        N_dash_dash_ly = (np.random.normal(0, 1.778e-6, (U, Ly))+ 1j*np.random.normal(0, 1.778e-6, (U, Ly)))
+        H_eff = H_tru @ Te_H + (N_dash_dash_ly / np.sqrt(Pt_mW))
+
+        gamma0 = Pt_mW / P_noise_mW
+        I_Ly = np.identity(Ly)
+        W_MMSE = (np.linalg.inv(H_eff.conj().T @ H_eff + (Ly / gamma0) * I_Ly) @ H_eff.conj().T).T
+
+        Wr = W_MMSE
+        B = Wr.T @ H_tru @ Te_H @ A
+        S_pow = np.abs(np.diag(B)) ** 2
+        I_pow = np.sum(np.abs(B) ** 2, axis=1) - S_pow
+
+        Rnn = P_noise_mW * Wr.T @ (Wr.T).conj().T
+        N_pow = np.diag(Rnn)
+
+        C_ly = np.log2(S_pow / (I_pow + N_pow) + 1)
+        C_sum += float(np.real(np.sum(C_ly)))
+
+    return C_sum / K, 1.0, None
 
 
 ##################################################################################################################
-# 直接波のみ、正面からの設定を作るための関数
-def setting_Direct_synario(channel_type, d):
-    chi = channel.define_chi(channel_type)
-    N = 1
-    M = np.ones(1, dtype=int)
-    Z = channel.define_Zn(N,channel_type)
-    U_nm = channel.define_Unm(N,M,channel_type)
-    rho = channel.intracluster_delays(M, N, setting='InH')
-    tau = channel.cluster_excess_delays(rho, N, M, channel_type)
-    beta = channel.SP_phases(M,N)
-    phi_deg = [np.zeros(M[i]) for i in range(N)]
-    theta_deg = [np.zeros(M[i]) for i in range(N)]
-    eta_deg = [np.zeros(M[i]) for i in range(N)]
-    varphi_deg = [np.zeros(M[i]) for i in range(N)]
-    eta_dir = np.degrees(np.arcsin(1 / d))
-    eta_deg[0][0] = eta_dir
-    theta_dir = -eta_dir
-    theta_deg[0][0] = theta_dir
-    varphi_deg[0][0] = 180
-    
-    Direct_Syanario_Data = {
-        'chi': chi,
-        'N': N,
-        'M': M,
-        'Z': Z,
-        'U_nm': U_nm,
-        'rho': rho,
-        'tau': tau,
-        'beta': beta,
-        'phi_deg': phi_deg,
-        'theta_deg': theta_deg,
-        'varphi_deg': varphi_deg,
-        'eta_deg': eta_deg
-    }
-    
-    return Direct_Syanario_Data
-
 def setting_NYUSIM_synario(Base_data_num, d):
     chi = Base_data_num['chi']
     N = Base_data_num['N']
@@ -508,7 +355,7 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     # n番目のTCのm番目のUE鏡像体#0と，v番目のサブアレーのqy, qz番目のアンテナ素子間の距離をrm,n,v, qy, qz 式14
     r_mnv0qyqz = channel.distance_to_eachanntena(MUE_coordinate, subarray_v_qy_qz, N, M, V, Q)
     # UEの#0から各アンテナ素子への伝搬時間 ㉓
-    tau_mnv0qyqz = r_mnv0qyqz / c_ns  # (N, max(M), V, Q, Q)
+    tau_mnv0qyqz = r_mnv0qyqz / c_ns 
     phi_deg_v, theta_deg_v = channel.calc_each_subarray_AOD_EOD(N, M, MUE_coordinate, subarray_v_qy_qz, V)
     
     for v in range(V):
@@ -522,12 +369,12 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     t_nm = channel.abs_timedelays(d, rho, tau, N, M) #絶対遅延
     P_mW = channel.cluster_power(Pr_dBm, N, tau, Z, channel_type)
     Pi_mW = channel.SP_power(N, M, P_mW, rho, U_nm, channel_type)
+    print("Pi_mW:", Pi_mW)
     P_each_career_mW = channel.cluster_Power_each_career(Pr_dBm_each_career, Z, N, tau, channel_type)
     Pi_each_career_mW = channel.SP_Power_each_career(N, M, P_each_career_mW, rho, U_nm, channel_type)
     
     DFT_weights = channel.DFT_weight_calc(Q)
     
-
 
     b_varphi_eta = channel.define_b_verphi_eta(N, M, eta_rad)
     Amp_per_career_mW = np.sqrt(Pi_each_career_mW)
@@ -576,34 +423,27 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     
     a_MUE_vnm = Amp_desital * np.exp(1j * beta) * b_varphi_eta_v
     
-    a_mn0vkqyqz = np.zeros((N, max(M), V, Q, Q), dtype=np.complex64)
-    # f_GHz_val: 周波数[GHz]
-    lam = 0.3 / f_GHz_val
+    a_mn0vkqyqz = np.zeros((N, max(M), V, Q, Q, K), dtype=np.complex64)
+    lam = 0.3 / f_GHz
 
-    # tau_mnv0qyqz は (N, max(M), V, Q, Q) で与えられている
-    exp_term = np.exp(-2j * np.pi * f_GHz_val * tau_mnv0qyqz)  # shape: (N, max(M), V, Q, Q)
-    print(f"[DEBUG] exp_term shape: {exp_term.shape}, a_MUE_vnm shape: {a_MUE_vnm.shape}, a_phi_theta shape: {a_phi_theta.shape}")
+    exp_term = np.exp(-2j * np.pi * f_GHz[None, None, None, None, None, :] * tau_mnv0qyqz[:, :, :, :, :, None])  # shape: (N, max(M), V, Q, Q, K)
 
     # 各アンテナ素子においての複素振幅　式47
-    a_mn0vkqyqz = np.einsum('vnm,vnm,vnmyz->nmvyz', a_MUE_vnm, a_phi_theta, exp_term, optimize=True)
+    a_mn0vkqyqz = np.einsum('vnm,vnm,vnmyzk->nmvyzk', a_MUE_vnm, a_phi_theta, exp_term, optimize=True)
 
     c = np.cos(eta_rad_v) * np.sin(varphi_rad_v)
-
-    # 1) c.shape == (N, M, V) ならそのまま
-    if c.shape[-1] != a_mn0vkqyqz.shape[2]:
-        # 2) c.shape == (V, N, M) みたいな場合 → (N, M, V) に移す
-        #    (先頭がVだと仮定して moveaxis → 軸順を整える)
-        c = np.moveaxis(c, 0, -1)  # (N, M, V) になる想定
+    # (V, N, M) -> (N, M, V) へ明示的に入れ替え
+    c = np.transpose(c, (1, 2, 0))
     
-    # 位相 (N, M, U, V, 1, 1)
+    # 位相 (N, M, U, V, 1, 1, 1)
     phase = np.exp(
         -1j * np.pi 
-        * u[None, None, :, None, None, None]     # (1,1,U,1,1,1)
-        * c[:, :, None, :, None, None]           # (N,M,1,V,1,1)
+        * u[None, None, :, None, None, None, None]     # (1,1,U,1,1,1,1)
+        * c[:, :, None, :, None, None, None]           # (N,M,1,V,1,1,1)
     )
 
-    # a_mn0vkqyqz を (N, M, 1, V, Q, Q) にして掛ける → (N, M, U, V, Q, Q)
-    a_mnuvkqyqz = a_mn0vkqyqz[:, :, None, :, :, :] * phase
+    # a_mn0vkqyqz を (N, M, 1, V, Q, Q, K) にして掛ける → (N, M, U, V, Q, Q, K)
+    a_mnuvkqyqz = a_mn0vkqyqz[:, :, None, :, :, :, :] * phase
     # すべてのマルチパスについて和を取る　式48  
     a_uvkqyqz = np.sum(a_mnuvkqyqz, (0,1))
 
@@ -614,6 +454,7 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     # 各サブアレーの最大受信電力を優先してビーム割当
     threshold = -73 # ビーム割当の閾値
     ba, row = Beam_allocation_method_2(P_sub_dash_dBm, threshold, testch_num=0)
+    print(ba)
     
     invalid_indices = []  # 各wごとに初期化
     v = 0  # v をループ内で一意に管理
@@ -632,35 +473,133 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     # vの次元を削除して V' にする
     valid = np.setdiff1d(np.arange(V), invalid_indices)  # 残すvのインデックス
     w_DD_pape_red = w_DD_pape[valid]      # (V′,Q,Q)
-    a_red = a_uvkqyqz[:,valid,:,:]
-    n_dash_uv_full = channel.noise_dash(U, V)
+    a_red = a_uvkqyqz[:,valid,:,:,:]  # (U, V′, Q, Q, K)
+    n_dash_uv_full = channel.noise_dash_K_10(U, V)
     n_dash_uv_vdash = n_dash_uv_full[:, valid, :]
 
-    # 近傍界チャネル計算
     # チャネル行列を計算　式49
-    h_uvk = np.einsum('vyz,uvyz->uv', w_DD_pape_red, a_red, optimize=True)  # (V′)
+    h_uvk = np.einsum('vyz,uvyzk->uvk', w_DD_pape_red, a_red, optimize=True)  # (V′)
+    if use_H == "E_wo":
+        h_uvk = h_uvk + n_dash_uv_vdash[:,:,:,0]  # (U, V′, K)
     
-    Pu_mW_per_carrer = Pu_mW / 2000  # 1キャリアあたりの送信電力(mW)
+###########################################################################################################################.
+    h_uvk *= np.exp(1j * 2 * np.pi * f_GHz[None, None, :]*t_nm[0, 0])
+
+    # 周波数軸
+    f_Hz = f_GHz * 1e9
+    K = f_Hz.size
+    df = f_Hz[1] - f_Hz[0]
+
+    # 遅延軸（IFFTの遅延サンプル位置）
+    tau = np.arange(K) / (K * df)      # [s]
+    tau_ns = tau * 1e9                 # [ns]
+
+    H_mag_org = np.linalg.norm(h_uvk, axis=(0, 1))  # (K,)
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(H_mag_org)
+    plt.xlabel("Frequency index k")
+    plt.ylabel("|H_bb,k|")
+    title = "Channel amplitude in frequency domain"
+    plt.title(title)
+    plt.grid(True)
+    plt.tight_layout()
+    # channel.save_current_fig_pdf(title)
+    plt.show()
+
+    # ==================================================
+    # ① 対象拡張と 2K IDFT
+    # ==================================================
+    # H(0)...H(K-1) の後ろに H(K-1)...H(0) を結合して 2K ポイントにする
+    # [..., ::-1] は最後の次元（K）を逆順にする Python のスライス操作です
+    H_w_rev = h_uvk[..., ::-1]
+    H_w_2K = np.concatenate([h_uvk, H_w_rev], axis=-1)  # shape: (U, V', 2K)
+
+    # 2K IDFT を実行
+    h_tau_2K = np.fft.ifft(H_w_2K, axis=-1)
+
+    # ==================================================
+    # ② ゼロマスキング (100 ns ～ 1900 ns)
+    # ==================================================
+    # 拡張前の遅延軸における 100 ns のインデックス L を計算
+    # 元の遅延分解能 dt = 1 / (K * df)
+    dt = 1.0 / (K * df)
+    L = int(np.round(100e-9 / dt))  # 100 ns に対応するインデックス
+
+    # 指定通り、h^(2L) ～ h^(2K - 1 - 2L) を 0 に置き換える
+    h_tau_2K_masked = h_tau_2K.copy()
+    # Pythonのスライスは終端を含まないため、後ろのインデックスは 2*K - 2*L とします
+    h_tau_2K_masked[..., 2*L : 2*K - 2*L] = 0
+
+    # ==================================================
+    # ③ 2K DFT と前半部分の抽出 (雑音抑圧チャネルの取得)
+    # ==================================================
+    # DFT を適用
+    H_w_2K_masked = np.fft.fft(h_tau_2K_masked, axis=-1)
+
+    # 前半 K ポイント分を取り出し、雑音抑圧されたチャネルとする
+    H_w_denoised = H_w_2K_masked[..., :K]  # shape: (U, V', K)
+
+    # ==================================================
+    # ④ 結果の比較プロット（おまけ：マスキングの効果確認）
+    # ==================================================
+    # マスキング前後の周波数特性の振幅
+    H_mag_denoised = np.linalg.norm(H_w_denoised, axis=(0, 1))
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(H_mag_org, label="Original", alpha=0.7)
+    plt.plot(H_mag_denoised, label="Denoised (Zero-Masked)", linestyle='--')
+    plt.xlabel("Frequency index k")
+    plt.ylabel("|H_bb,k|")
+    plt.title("Channel amplitude in frequency domain (Comparison)")
+    plt.legend(loc='upper right')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
     
-    if use_H == 'T':
-        h_w_est = h_uvk
-    elif use_H == 'E_w':
-        h_w_est = h_uvk + n_dash_uv_vdash[:, :, :10].mean(axis=2) / np.sqrt(Pu_mW_per_carrer)
-    elif use_H == 'E_wo':
-        h_w_est = h_uvk + n_dash_uv_vdash[:, :, 0] / np.sqrt(Pu_mW_per_carrer)
+# ==================================================
+    # （修正版）時間領域・遅延プロファイルのプロット（絶対値表記）
+    # ==================================================
+    # 2Kポイントの遅延軸（ns）を作成
+    dt_2K = 1.0 / (2 * K * df)
+    tau_2K_ns = np.arange(2 * K) * dt_2K * 1e9
+
+    # 空間次元（U, V'）にわたってノルム（振幅・絶対値）をとる
+    h_mag_2K = np.linalg.norm(h_tau_2K, axis=(0, 1))               # マスキング前
+    h_mag_2K_masked = np.linalg.norm(h_tau_2K_masked, axis=(0, 1)) # マスキング後
+
+    # グラフ描画
+    plt.figure(figsize=(8, 5))
+    # 絶対値をそのままプロット
+    plt.plot(tau_2K_ns, h_mag_2K, label="Original (with Noise)", color='tab:red', alpha=0.7)
+    plt.plot(tau_2K_ns, h_mag_2K_masked, label="Masked (Denoised)", color='tab:blue', linestyle='--')
     
-    eig,_ = calc_eigval(h_w_est)
-    print(f"[DEBUG] d={d}, Ssub={Ssub_lam}, validV={len(valid)}, eig[:4]={eig[:4]}")
-    print(f"[DEBUG] Beam Allocation:\n{ba}")
+    # ゼロマスキングした範囲（100ns ～ 1900ns）を背景色で強調（オプション）
+    # plt.axvspan(100, 1900, color='gray', alpha=0.2, label="Masked Region")
 
-    return h_uvk, h_w_est, ba
-
-
+    plt.xlabel("Delay [ns]")
+    plt.ylabel("Amplitude |h(τ)|")  # 縦軸のラベルを絶対値表記に変更
+    plt.title("Delay Profile in Time Domain (Absolute Value)")
+    
+    # 横軸の表示範囲（1000nsまで）
+    plt.xlim(-50, 2050)
+    plt.xticks([0, 100, 500, 1000, 1500, 1900, 2000], fontsize="small")
+    
+    # 縦軸は0からスタートさせ、上は自動調整（ピークより少し上まで）
+    plt.ylim(bottom=0)
+    
+    plt.grid(True, linestyle=':')
+    plt.legend(loc='upper right')
+    plt.tight_layout()
+    plt.show()
+    
+    print(h_uvk)
+    
+    return h_uvk, H_w_denoised, ba
 
 
 def sweep_capacity_vs_d_mc(
     channel_indices,
-    Synario,
     channel_type, Q, lam,
     d_values, Ssub_list,
     base_seed, MC,
@@ -687,44 +626,22 @@ def sweep_capacity_vs_d_mc(
             C_list = []
             C_single_list = []
             Ly_list = []
-            
-            if Synario == "Direct":
-                np.random.seed(base_seed)
 
-                Synario_Data = setting_Direct_synario(channel_type, d)
+            for testch_num in channel_indices:
+                np.random.seed(base_seed + testch_num)
+
+                Synario_Data = setting_NYUSIM_synario(Base_data[testch_num], d)
                 H, H_use, ba = simulation_core(
-                    channel_type, Q, lam, d, Pu_dBm, Ssub_lam,
-                    Synario_Data=Synario_Data, use_H=use_H
+                    channel_type, Q, lam, d, Pu_dBm,Ssub_lam,
+                    Synario_Data, use_H=use_H
                 )
                 
-
                 C, Ly, _ = calc_channel_capacity(H_use, H, Pt_mW, P_noise_mW)
                 C_single, _, _ = calc_channel_capacity_SingleLayer(H_use, H, Pt_mW, P_noise_mW)
 
                 C_list.append(C)
                 C_single_list.append(C_single)
                 Ly_list.append(Ly)
-
-            else:  # NYUSIM
-                for testch_num in channel_indices:
-                    np.random.seed(base_seed + testch_num)
-
-                    Synario_Data = setting_NYUSIM_synario(Base_data[testch_num], d)
-                    H, H_use, ba = simulation_core(
-                        channel_type, Q, lam, d, Pu_dBm,Ssub_lam,
-                        Synario_Data, use_H=use_H
-                    )
-                    
-                    G = H.conj().T @ H
-                    MC = mutual_coherence_matrix_from_Gram(G)
-                    # print("MC =",MC)
-
-                    C, Ly, _ = calc_channel_capacity(H_use, H, Pt_mW, P_noise_mW)
-                    C_single, _, _ = calc_channel_capacity_SingleLayer(H_use, H, Pt_mW, P_noise_mW)
-
-                    C_list.append(C)
-                    C_single_list.append(C_single)
-                    Ly_list.append(Ly)
 
             C_arr = np.asarray(C_list, float)
             C1_arr = np.asarray(C_single_list, float)
@@ -905,55 +822,6 @@ def plot_eigs(results, Ssub_list, k_list=(1,2), use_H="T", save_folder=None):
     plt.show()
     plt.close(fig)
 
-def total_paths_from_M(M):
-    # M は list / np.ndarray / object配列 どれでも来うる想定
-    return int(np.sum(np.asarray(M, dtype=int)))
-
-def pick_typical_channel_by_capacity_totalpaths(
-    Base_data,
-    channel_type, Q, lam,
-    d_pick=5, Ssub_lam=0,
-    Pu_dBm=30,
-    Pt_mW=1000/2000, P_noise_mW=6.31e-12,
-    use_H="T",
-    total_paths_target=2,
-    base_seed=9,
-):
-    idx_list, C_list = [], []
-
-    for idx in range(len(Base_data)):
-        M = Base_data[idx]["M"]
-        total_paths = total_paths_from_M(M)
-
-        if total_paths != int(total_paths_target):
-            continue
-
-        np.random.seed(base_seed + idx)
-        Synario_Data = setting_NYUSIM_synario(Base_data[idx], d_pick)
-        H, H_use, ba = simulation_core(
-            channel_type, Q, lam, d_pick, Pu_dBm, Ssub_lam,
-            Synario_Data, use_H=use_H
-        )
-        C, Ly, _ = calc_channel_capacity(H_use, H, Pt_mW, P_noise_mW)
-
-        idx_list.append(idx)
-        C_list.append(float(C))
-        print(f"[check] idx={idx}, total_paths={total_paths}")
-
-    if not idx_list:
-        raise ValueError(f"総パス数 ΣM = {total_paths_target} のチャネルが見つからない")
-
-    C_arr = np.asarray(C_list, float)
-    C_med = float(np.median(C_arr))
-    pick_pos = int(np.argmin(np.abs(C_arr - C_med)))
-    picked_idx = int(idx_list[pick_pos])
-
-    print(f"[pick] total_paths(ΣM)={total_paths_target} count={len(idx_list)}")
-    print(f"[pick] d={d_pick}m, Ssub={Ssub_lam}λ, use_H={use_H}")
-    print(f"[pick] median C={C_med:.3f}, picked idx={picked_idx}, C={C_arr[pick_pos]:.3f}")
-
-    return picked_idx, C_med, idx_list, C_list
-
 ###############################################################
 channel_type = "InH"
 NF_setting = "Near"
@@ -963,13 +831,13 @@ MC = 1             # モンテカルロ回数
 
 Synario = "NYUSIM"  # "Direct" or "NYUSIM"
 # channel_indices = range(1, 2, 1)  # NYUSIMチャネルの場合のインデックスリスト(範囲取って平均)
-channel_indices = [11]  # NYUSIMチャネルの場合のインデックスリスト(個別指定)
+channel_indices = [0]  # NYUSIMチャネルの場合のインデックスリスト(個別指定)
 use_H = "T" # 'T' : 真のチャネル行列 , 'E_w' : 推定&同相加算　''E_wo' : 推定&非同相加算
 
 # パイロット信号送信電力パラメータ
 Pu_dBm = 30  # UEの送信電力(dBm)※全サブキャリア
 
-save_folder = False #: グラフを保存しない, フォルダ名 : 保存するフォルダ名
+save_folder = None #: グラフを保存しない, フォルダ名 : 保存するフォルダ名
 # save_folder =  f"Channel_{channel_indices[0]}" 
 # save_folder = "Resized"
 ################################################################pr
@@ -989,8 +857,8 @@ Pt_mW = 1000/2000  #通信時のサブキャリアごとの基地局送信電力
 P_noise_mW = 6.31e-12 #500kHzあたりの雑音電力
 
 # シミュレーションパラメータ
-d_values = list(range(5, 51, 5))
-Ssub_list = [0, 50, 100]
+d_values = list(range(15, 16, 5))
+Ssub_list = [0]
 
 
 # picked_idx, C_med, idx_list, C_list = pick_typical_channel_by_capacity_totalpaths(
@@ -1008,7 +876,6 @@ Ssub_list = [0, 50, 100]
 
 results = sweep_capacity_vs_d_mc(
     channel_indices=channel_indices,
-    Synario=Synario,
     channel_type=channel_type, Q=Q, lam=lam,
     d_values=d_values, Ssub_list=Ssub_list,
     base_seed=base_seed, MC=MC,

@@ -1,6 +1,193 @@
 import numpy as np
 import scipy.stats as st
 import matplotlib.pyplot as plt
+import Channel_functions as channel
+# NYUSIMチャネルモデルのマルチパス数を描画する関数
+import pickle
+from pathlib import Path
+import matplotlib.ticker as ticker
+
+# with open("C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall/Paper/Channel_391/Pu=10dBm/Fig_pickle/260212_Channel_Capacity_vs_BS-UE_Distance_(True_Channel)_1641.fig.pickle", "rb") as f:
+#     fig = pickle.load(f)
+
+# ax = fig.axes[0]
+
+# for line in ax.get_lines():
+
+#     label = line.get_label()
+
+#     # --- マーカー設定 ---
+#     if "Multi" in label:
+#         # Multi は中塗り
+#         line.set_markerfacecolor(line.get_color())
+#     else:
+#         # Single は中抜き
+#         line.set_markerfacecolor("none")
+
+#     line.set_markersize(7)
+#     line.set_markeredgewidth(1.0)
+
+#     # --- 線幅 ---
+#     if line.get_linestyle() == "--":
+#         line.set_linewidth(2.5)
+#     else:
+#         line.set_linewidth(2.0)
+
+# # --- 凡例も同様に修正 ---
+# leg = ax.get_legend()
+
+# for h in leg.legend_handles:
+#     label = h.get_label()
+
+#     if "Multi" in label:
+#         h.set_markerfacecolor(h.get_color())
+#     else:
+#         h.set_markerfacecolor("none")
+
+#     h.set_markeredgewidth(1.0)
+#     h.set_markersize(8)
+
+#     if h.get_linestyle() == "--":
+#         h.set_linewidth(2.5)
+#     else:
+#         h.set_linewidth(2.0)
+
+
+# title_str = "forVTC_Capacity_図7"
+# channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures"), folder="", variants=("Paper",))
+
+# plt.show()
+
+# exit()
+
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+def _get_M_list(one_channel, key_M="M"):
+    """Return 1D int array of M (per-cluster multipath counts)."""
+    if isinstance(one_channel, dict):
+        if key_M not in one_channel:
+            raise KeyError(f"key '{key_M}' not found. keys={list(one_channel.keys())}")
+        M = one_channel[key_M]
+        if np.isscalar(M):
+            return np.array([int(M)], dtype=int)
+        return np.array(M, dtype=int)
+
+    # one_channel itself is M
+    if np.isscalar(one_channel):
+        return np.array([int(one_channel)], dtype=int)
+    return np.array(one_channel, dtype=int)
+
+
+def plot_multipath_hist_cdf_InH(
+    npy_path,
+    key_M="M",
+    title=None,                 # 原稿ではタイトルは基本ナシ推奨
+    max_x=None,
+    figsize=(3.5, 2.8),         # 1カラム用
+    save_folder=None,           # channel.save_current_figに渡す用
+    save_name="InH_multipath_hist_cdf",
+    root_fig=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"),
+):
+    """
+    npy_path: Base_InH.npy など（object配列 or list of dict）を想定
+    ヒストグラム：Frequency (%)、CDF：Cumulative distribution (%)
+    """
+
+    # IEEE-ish font (固定)
+    plt.rcParams.update({
+        "font.family": "Times New Roman",
+        "font.size": 8,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+    })
+
+    npy_path = Path(npy_path)
+
+    data = np.load(npy_path, allow_pickle=True)
+    channels = data.tolist() if isinstance(data, np.ndarray) else data
+
+    counts = []
+    for ch in channels:
+        M = _get_M_list(ch, key_M=key_M)
+        counts.append(int(np.sum(M)))  # 総マルチパス数 = Σ M[n]
+    counts = np.array(counts, dtype=int)
+
+    if max_x is None:
+        max_x = int(counts.max())
+
+    # 整数ビン（1刻み）
+    bins = np.arange(0.5, max_x + 1.5, 1.0)
+
+    hist, _ = np.histogram(counts, bins=bins)
+    freq = hist / hist.sum() * 100.0
+    xs = np.arange(1, max_x + 1)
+
+    cdf = np.cumsum(freq)
+
+    fig, ax1 = plt.subplots(figsize=figsize, constrained_layout=True)
+
+    # Bar: Frequency (%)
+    ax1.bar(xs, freq, width=0.9)
+    ax1.set_xlabel("No. of multipath components")
+    ax1.set_ylabel("Frequency (%)")
+    ax1.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+    ax1.set_xlim(0, max_x + 1)
+    ax1.set_ylim(0, max(5, np.ceil(freq.max()/5)*5))  # ちょい見やすく
+
+    # Line: CDF (%)
+    ax2 = ax1.twinx()
+    ax2.plot(xs, cdf, marker="o", markersize=3.5, lw=1.2, color="blue")
+    ax2.set_ylabel("Cumulative distribution (%)")
+    ax2.set_ylim(0, 100)
+
+    # グリッドは薄め（論文向き）
+    ax1.grid(True, linewidth=0.4, alpha=0.3)
+
+    # 原稿では基本タイトル無し（必要ならtitle引数で）
+    if title:
+        ax1.set_title(title, fontsize=9)
+    else:
+        ax1.set_title("")
+
+    # 保存（Paper/Slide の運用に合わせる）
+    if save_folder is not None:
+        # タイトル無しでPaper保存
+        ax1.set_title("")
+        channel.save_current_fig(
+            save_name,
+            root=root_fig,
+            folder=save_folder,
+            variants=("Paper",),
+        )
+        # タイトル付きでSlide保存（任意）
+        if title:
+            ax1.set_title(title, fontsize=9)
+            channel.save_current_fig(
+                save_name,
+                root=root_fig,
+                folder=save_folder,
+                variants=("Slide",),
+            )
+
+    plt.show()
+    plt.close(fig)
+
+
+# ===== 使い方（パスもまとめて）=====
+BASE = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data")
+plot_multipath_hist_cdf_InH(
+    npy_path=BASE / "Data" / "Base_InH.npy",
+    title=None,  # 原稿用はNone推奨
+    figsize=(3.5, 2.8),
+    save_folder="Resized",      # 例： "Paper_Fig"
+    save_name="Fig_multipath_InH",
+)
+
+exit()
 
 def plot_cdf(data, label, color, linestyle, linewidth=5):  # ← 線太くした
     sorted_data = np.sort(data)
@@ -396,3 +583,4 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 ##########################################################################################################################################
+

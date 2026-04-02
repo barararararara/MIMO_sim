@@ -426,42 +426,22 @@ def Mirror_UE_positions(d, N, M, rho, tau, phi_rad, theta_rad):
         MUE_coordinates[n, :m_len, 2] = z
     return R, MUE_coordinates
 
-# サブアレーの各素子の座標を計算
-def calc_anntena_xyz(lam, V, Q):
-    L = (lam * (Q + 1) / 2) * V / 3
-    subarray_v_qy_qz = np.zeros((V, Q, Q, 3))
 
-    qy_idx, qz_idx = np.meshgrid(np.arange(Q), np.arange(Q), indexing='ij')
+def calc_Rayleigh_distance(subarray_v_qy_qz):
+    # 4隅インデックス
+    lam = 3.0*1e8 / (142*1e9)
+    Q = subarray_v_qy_qz.shape[1]
+    corners = [(0,0), (0,Q-1), (Q-1,0), (Q-1,Q-1)]
 
-    for v in range(V):
-        if 0 <= v < V / 3:
-            x = L / (2 * math.sqrt(3))
-            y_base = -L / 2 + lam / 2 * (1 + (Q + 1)) * v
-            y = y_base + qy_idx * lam / 2
-            z = qz_idx * lam / 2
-            coords = np.stack([np.full_like(y, x), y, z], axis=-1)
+    P0 = np.array([subarray_v_qy_qz[0, qy, qz] for qy,qz in corners])  # (4,3)
+    P1 = np.array([subarray_v_qy_qz[3, qy, qz] for qy,qz in corners])  # (4,3)
 
-        elif V / 3 <= v < 2 * V / 3:
-            offset = v - V / 3
-            x = L / (2 * math.sqrt(3)) - math.sqrt(3) / 2 * lam / 2 * (1 + (Q + 1) * offset)
-            y = L / 2 - 0.5 * lam / 2 * (1 + (Q + 1) * offset)
-            x_shift = -math.sqrt(3) * qy_idx * lam / 4
-            y_shift = -qy_idx * lam / 4
-            z = qz_idx * lam / 2
-            coords = np.stack([x + x_shift, y + y_shift, z], axis=-1)
-
-        else:
-            offset = v - 2 * V / 3
-            x = -L / math.sqrt(3) + math.sqrt(3) / 2 * lam / 2 * (1 + (Q + 1) * offset)
-            y = -0.5 * lam / 2 * (1 + (Q + 1) * offset)
-            x_shift = math.sqrt(3) * qy_idx * lam / 4
-            y_shift = -qy_idx * lam / 4
-            z = qz_idx * lam / 2
-            coords = np.stack([x + x_shift, y + y_shift, z], axis=-1)
-
-        subarray_v_qy_qz[v] = coords
-
-    return subarray_v_qy_qz
+    # 4×4 の全組み合わせ距離 → 最大
+    diff = P0[:, None, :] - P1[None, :, :]   # (4,4,3)
+    dist = np.linalg.norm(diff, axis=2)      # (4,4)
+    D_subarray = float(dist.max()) / lam
+    Rayleigh = 2 * (D_subarray**2) / lam
+    return D_subarray, Rayleigh
 
 # サブアレー間隔を広げるようなver
 def calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=0):
@@ -476,7 +456,6 @@ def calc_anntena_xyz_Ssub(lam, V, Q, Ssub_lam=0):
     p = lam/2
     Vf = V // 3
     L = (Q+1) * p * Vf + (Vf-1)*S_sub
-
     subarray_v_qy_qz = np.zeros((V, Q, Q, 3), dtype=float)
     qy_idx, qz_idx = np.meshgrid(np.arange(Q), np.arange(Q), indexing="ij")
     z = lam/2 + qz_idx * p
@@ -543,6 +522,20 @@ def define_b_verphi_eta(N, M, eta_rad):
     for n in range(N):
         b_varphi_eta[n] = math.sqrt(3/2)*np.cos(eta_rad[n])
     return(b_varphi_eta)
+
+def define_b_verphi_eta_v(V, N, M, eta_rad_v):
+    """
+    eta_rad_v: shape (V, N, max(M)) の numpy配列
+    戻り値: shape (V, N, max(M)) の numpy配列
+    """
+    b_varphi_eta_v = np.zeros((V, N, max(M)))
+    for v in range(V):
+        for n in range(N):
+            mlen = int(M[n])
+            # 有効なパス数(mlen)の部分だけ計算する
+            b_varphi_eta_v[v, n, :mlen] = np.sqrt(3/2) * np.cos(eta_rad_v[v, n, :mlen])
+            
+    return b_varphi_eta_v
 
 # ビーム割り当て用のaを設定
 def define_a(V, N, M, phi_rad, theta_rad, NF_setting):
@@ -637,7 +630,7 @@ def complex_Amp_at_there(N, M, f, r, complex_Amp_at_O):
 
 # DFTのウエイトを計算する 近傍界用 26
 def DFT_weight_calc(Q):
-    w_DD = np.array((Q,Q,Q,Q), dtype=complex)
+    w_DD = np.empty((Q,Q,Q,Q), dtype=complex)
     indices = np.arange(Q)
     pa, pe, qy, qz = np.meshgrid(indices, indices, indices, indices, indexing="ij")
     
@@ -816,12 +809,12 @@ def plot_graph_0(d,Q,P_sub_dash_dBm,P_far_sub_dash_dBm,theta_rad,phi_rad,pe=31):
     y_near_dash_v1 = np.zeros(Q)
     y_far_dash_v1 = np.zeros(Q)
     for pa in range(Q):
-        if P_sub_dash_dBm[1][pa][pe]!=None:
-            y_near_dash_v1[pa] = P_sub_dash_dBm[1][pa][pe]
+        if P_sub_dash_dBm[0][pa][pe]!=None:
+            y_near_dash_v1[pa] = P_sub_dash_dBm[0][pa][pe]
         else:
             y_near_dash_v1[pa] = None
-        if P_far_sub_dash_dBm[1][pa][pe]!=None:
-            y_far_dash_v1[pa] = P_far_sub_dash_dBm[1][pa][pe]
+        if P_far_sub_dash_dBm[0][pa][pe]!=None:
+            y_far_dash_v1[pa] = P_far_sub_dash_dBm[0][pa][pe]
         else:
             y_far_dash_v1[pa] = None
     
@@ -1007,10 +1000,10 @@ def calc_complex_Amp_at_O_u(f, U, N, M, Amp_per_career_desital, beta, tau_nm, b_
     return complex_Amp_at_O
 
 # パイロット信号の送信電力も考慮した雑音を生成する
-def noise_dash(U, V):
-    # (V, V, 10) サイズの複素乱数を生成
-    real_part = np.random.normal(0, 1.778 * 1e-6, (U,V,10))
-    imag_part = np.random.normal(0, 1.778 * 1e-6, (U,V,10))
+def noise_dash_K_10(U, V):
+    # (U, V, K. 10) サイズの複素乱数を生成
+    real_part = np.random.normal(0, 1.778 * 1e-6, (U,V,2000,10))
+    imag_part = np.random.normal(0, 1.778 * 1e-6, (U,V,2000,10))
     n_u_k_v = real_part + 1j * imag_part
     return n_u_k_v
 
@@ -1075,6 +1068,7 @@ import pickle
 # グラフを保存する関数(VTCFall用)
 def save_current_fig(
     title: str,
+    root = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"),
     mode="both",
     folder=None,
     variants=("Paper", "Slide"),
@@ -1093,8 +1087,6 @@ def save_current_fig(
 
     safe_title = _sanitize_title(title)
 
-    root = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall")
-
     fig = plt.gcf()
     saved_paths: list[Path] = []
 
@@ -1103,15 +1095,18 @@ def save_current_fig(
         if folder is not None:
             out_dir_v = out_dir_v / folder
         out_dir_v.mkdir(parents=True, exist_ok=True)
-
+        out_dir_v = Path(out_dir_v)
         base = f"{date_str}_{safe_title}_{time_str}"
 
         if mode in ("png", "both"):
-            fig.savefig(out_dir_v / f"{base}.png", bbox_inches="tight", dpi=600)
+            (out_dir_v/"Png").mkdir(parents=True, exist_ok=True)
+            fig.savefig(out_dir_v / "Png" / f"{base}.png", bbox_inches="tight", dpi=600)
         if mode in ("pdf", "both"):
-            fig.savefig(out_dir_v / f"{base}.pdf", bbox_inches="tight")
+            (out_dir_v/"Pdf").mkdir(parents=True, exist_ok=True)
+            fig.savefig(out_dir_v / "Pdf" / f"{base}.pdf", bbox_inches="tight")
         if mode in ("fig", "both"):
-            with open(out_dir_v / f"{base}.fig.pickle", "wb") as f:
+            (out_dir_v/"Fig_pickle").mkdir(parents=True, exist_ok=True)
+            with open(out_dir_v / "Fig_pickle" / f"{base}.fig.pickle", "wb") as f:
                 pickle.dump(fig, f)
 
         saved_paths.append(out_dir_v / base)
