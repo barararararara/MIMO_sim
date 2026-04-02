@@ -30,8 +30,8 @@ def define_chi(setting):
         chi = np.random.normal(0, 4.0)
     return (chi)
 
-# step2 環境に依存する、全体の電力を計算
-def calc_Pr(lam, d, chi, Pt=10, g_dB=0, setting='InH', do=1):
+# step2 オムニアンテナ想定の受信電力
+def calc_Pr(lam, d, chi, Pt_dBm=10, setting='InH', do=1):
     # 環境に依る各パラメータを設定
     if setting == 'InH':
         n = 1.8
@@ -41,10 +41,10 @@ def calc_Pr(lam, d, chi, Pt=10, g_dB=0, setting='InH', do=1):
     # 受信電力を計算
     PL_FS = 20 * np.log10(4*np.pi*do/lam)
     PL = PL_FS + 10*n*np.log10(d/do) + chi
-    Pr = Pt - PL + g_dB
+    Pr_dBm = Pt_dBm - PL
 
-    return(Pr)
-def calc_Pr_each_career(lam, d, chi, Pu=-23, g_dB=0, setting='InH', do=1):
+    return(Pr_dBm)
+def calc_Pr_each_career(lam, d, chi, Pu=-23, setting='InH', do=1):
     # 環境に依る各パラメータを設定
     if setting == 'InH':
         n = 1.8
@@ -53,7 +53,7 @@ def calc_Pr_each_career(lam, d, chi, Pu=-23, g_dB=0, setting='InH', do=1):
     # 受信電力を計算
     PL_FS = 20 * np.log10(4*np.pi*do/lam)
     PL = PL_FS + 10*n*np.log10(d/do) + chi
-    Pr_each_career = Pu - PL + g_dB
+    Pr_each_career = Pu - PL
     return(Pr_each_career)
 
 # Lを求める
@@ -149,37 +149,37 @@ def define_Zn(N,setting):
     return(Z)
 
 # step7　n番目のクラスタ電力Pを決定する
-def cluster_power(Pr,N,tau,Z,setting='InH'):
+def cluster_power(Pr_dBm,N,tau,Z,setting='InH'):
     if setting == 'InH':
         gamma = 18.2
     elif setting == 'InF':
         gamma = 16.2
     P_dash_sum = 0
-    P = np.zeros(N)
+    P_mW = np.zeros(N)
     P_dash = np.zeros(N)
-    Pr_mW = 10 ** (Pr / 10)
+    Pr_mW = 10 ** (Pr_dBm / 10)
 
     P_dash = np.exp(-tau/gamma)*10**(Z/10)
     P_dash_sum = np.sum(P_dash)
-    P = (P_dash/P_dash_sum)*Pr_mW
+    P_mW = (P_dash/P_dash_sum)*Pr_mW
     
-    return(P)
+    return(P_mW)
 
-def cluster_Power_each_career(Pr_each_career,Z,N,tau,setting='InH'):
+def cluster_Power_each_career(Pr_dBm_each_career,Z,N,tau,setting='InH'):
     if setting == 'InH':
         gamma = 18.2
     elif setting == 'InF':
         gamma = 16.2
     P_dash_sum = 0
-    P_each_career = np.zeros(N)
+    P_each_career_mW = np.zeros(N)
     P_dash = np.zeros(N)
-    Pr_mW = 10 ** (Pr_each_career / 10)
+    Pr_mW = 10 ** (Pr_dBm_each_career / 10)
 
     P_dash = np.exp(-tau/gamma)*10**(Z/10)
     P_dash_sum = np.sum(P_dash)
-    P_each_career = (P_dash/P_dash_sum)*Pr_mW
+    P_each_career_mW = (P_dash/P_dash_sum)*Pr_mW
     
-    return(P_each_career)
+    return(P_each_career_mW)
 
 # step8の乱数によるUn,mを計算するとこ
 def define_Unm(N,M,setting):
@@ -1006,10 +1006,11 @@ def calc_complex_Amp_at_O_u(f, U, N, M, Amp_per_career_desital, beta, tau_nm, b_
     
     return complex_Amp_at_O
 
+# パイロット信号の送信電力も考慮した雑音を生成する
 def noise_dash(U, V):
     # (V, V, 10) サイズの複素乱数を生成
-    real_part = np.random.normal(0, 2.512 * 1e-6, (U,V,10))
-    imag_part = np.random.normal(0, 2.512 * 1e-6, (U,V,10))
+    real_part = np.random.normal(0, 1.778 * 1e-6, (U,V,10))
+    imag_part = np.random.normal(0, 1.778 * 1e-6, (U,V,10))
     n_u_k_v = real_part + 1j * imag_part
     return n_u_k_v
 
@@ -1057,7 +1058,6 @@ def save_to_npy(file_name, data):
     print(f"data have been saved to {file_name}")
     
 
-# グラフを保存する関数
 def _sanitize_title(title: str) -> str:
     """ファイル名に使えない/使いづらい文字を安全化。"""
     t = unicodedata.normalize("NFKC", str(title)).strip()
@@ -1072,9 +1072,19 @@ from zoneinfo import ZoneInfo
 import matplotlib.pyplot as plt
 import pickle
 
-def save_current_fig(title: str, mode="both", folder=None) -> Path:
+# グラフを保存する関数(VTCFall用)
+def save_current_fig(
+    title: str,
+    mode="both",
+    folder=None,
+    variants=("Paper", "Slide"),
+) -> list[Path]:
     """
-    mode: "png" / "pdf" / "fig" / "both"
+    variants:
+        ("Paper",) / ("Slide",) / ("Paper","Slide")
+
+    保存先:
+        .../Figures/26_VTCFall/{variant}/{folder(optional)}/YYMMDD_title_HHMM.(png|pdf|fig.pickle)
     """
     tz = ZoneInfo("Asia/Tokyo")
     now = datetime.now(tz)
@@ -1083,28 +1093,32 @@ def save_current_fig(title: str, mode="both", folder=None) -> Path:
 
     safe_title = _sanitize_title(title)
 
-    out_dir = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures")
-    if folder is not None:
-        out_dir = out_dir / folder
-    out_dir.mkdir(parents=True, exist_ok=True)
+    root = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall")
 
-    base = f"{date_str}_{safe_title}_{time_str}"
     fig = plt.gcf()
+    saved_paths: list[Path] = []
 
-    if mode in ("png", "both"):
-        fig.savefig(out_dir / f"{base}.png",
-                    bbox_inches="tight", dpi=600)
+    for variant in variants:
+        out_dir_v = root / str(variant)
+        if folder is not None:
+            out_dir_v = out_dir_v / folder
+        out_dir_v.mkdir(parents=True, exist_ok=True)
 
-    if mode in ("pdf", "both"):
-        fig.savefig(out_dir / f"{base}.pdf",
-                    bbox_inches="tight")
+        base = f"{date_str}_{safe_title}_{time_str}"
 
-    if mode in ("fig", "both"):
-        with open(out_dir / f"{base}.fig.pickle", "wb") as f:
-            pickle.dump(fig, f)
+        if mode in ("png", "both"):
+            fig.savefig(out_dir_v / f"{base}.png", bbox_inches="tight", dpi=600)
+        if mode in ("pdf", "both"):
+            fig.savefig(out_dir_v / f"{base}.pdf", bbox_inches="tight")
+        if mode in ("fig", "both"):
+            with open(out_dir_v / f"{base}.fig.pickle", "wb") as f:
+                pickle.dump(fig, f)
 
-    print(f"Saved ({mode}) → {out_dir / base}")
-    return out_dir / f"{base}"
+        saved_paths.append(out_dir_v / base)
+
+    print(f"Saved {len(variants)} variants → {root}")
+    return saved_paths
+
 
 
 
