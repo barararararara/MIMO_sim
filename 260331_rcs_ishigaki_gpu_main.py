@@ -8,9 +8,11 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (import for 3D)
 from pathlib import Path
+import torch
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# グローバル変数定義
-Q = 16 # サブアレーの素子数
+# システムパラメータ
+Q = 16 # 各サブアレーの一辺のアンテナ素子数
 V = 12 # サブアレー数
 U = 8 # UEのアンテナ素子数
 lam_cen = (3.0 * 1e8) / (142 * 1e9)
@@ -391,8 +393,27 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
         complex_Amp_at_MUE.append(amp * ph * bve)
 
     a_phi_theta = channel.define_a(V, N, M, phi_rad_v, theta_rad_v,NF_setting)
-    complex_Amp_at_each_antena = channel.complex_Amp_at_each_antena(f, V, Q, N, M, r_mnv0qyqz, complex_Amp_at_MUE, a_phi_theta)
-
+    
+    # ＝＝＝＝ GPU高速化ブロック⓪ (パイロット信号) ＝＝＝＝
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Mの長さを揃えた Numpy 配列を作る
+    c_Amp_MUE_pad = np.zeros((N, max(M)), dtype=np.complex128)
+    for n in range(N):
+        c_Amp_MUE_pad[n, :len(complex_Amp_at_MUE[n])] = complex_Amp_at_MUE[n]
+        
+    t_c_Amp = torch.tensor(c_Amp_MUE_pad, device=device, dtype=torch.complex128)
+    t_a_phi = torch.tensor(a_phi_theta, device=device, dtype=torch.complex128)
+    t_tau   = torch.tensor(r_mnv0qyqz / c_ns, device=device, dtype=torch.float64) 
+    t_f     = torch.tensor(f_GHz, device=device, dtype=torch.float64)
+    
+    t_pilot = t_c_Amp.unsqueeze(0) * t_a_phi # (V, N, M)
+    t_exp_pilot = torch.exp(-2j * np.pi * t_f.view(1, 1, 1, 1, 1, -1) * t_tau.unsqueeze(-1)) 
+    
+    t_complex_Amp_ant = torch.einsum('vnm, vnmyzk -> vkyz', t_pilot, t_exp_pilot)
+    complex_Amp_at_each_antena = t_complex_Amp_ant.cpu().numpy()
+    # ＝＝＝＝ GPU高速化ブロック⓪ 終了 ＝＝＝＝
+    
     n_k_v = channel.noise_n_k_v(V)
     P_sub_dash_dBm = channel.near_Power_inc_noise_optimized(V, Q, f, DFT_weights, complex_Amp_at_each_antena, n_k_v)
     
@@ -423,29 +444,26 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     
     a_MUE_vnm = Amp_desital * np.exp(1j * beta) * b_varphi_eta_v
     
-    a_mn0vkqyqz = np.zeros((N, max(M), V, Q, Q, K), dtype=np.complex64)
     lam = 0.3 / f_GHz
 
-    exp_term = np.exp(-2j * np.pi * f_GHz[None, None, None, None, None, :] * tau_mnv0qyqz[:, :, :, :, :, None])  # shape: (N, max(M), V, Q, Q, K)
-
-    # 各アンテナ素子においての複素振幅　式47
-    a_mn0vkqyqz = np.einsum('vnm,vnm,vnmyzk->nmvyzk', a_MUE_vnm, a_phi_theta, exp_term, optimize=True)
-
-    c = np.cos(eta_rad_v) * np.sin(varphi_rad_v)
-    # (V, N, M) -> (N, M, V) へ明示的に入れ替え
-    c = np.transpose(c, (1, 2, 0))
+    # ＝＝＝＝ GPU高速化ブロック① (式47・48) ＝＝＝＝
+    t_a_MUE_vnm   = torch.tensor(a_MUE_vnm, device=device, dtype=torch.complex128)
+    t_a_phi_theta = torch.tensor(a_phi_theta, device=device, dtype=torch.complex128)
+    t_tau_data    = torch.tensor(tau_mnv0qyqz, device=device, dtype=torch.float64) 
     
-    # 位相 (N, M, U, V, 1, 1, 1)
-    phase = np.exp(
-        -1j * np.pi 
-        * u[None, None, :, None, None, None, None]     # (1,1,U,1,1,1,1)
-        * c[:, :, None, :, None, None, None]           # (N,M,1,V,1,1,1)
-    )
-
-    # a_mn0vkqyqz を (N, M, 1, V, Q, Q, K) にして掛ける → (N, M, U, V, Q, Q, K)
-    a_mnuvkqyqz = a_mn0vkqyqz[:, :, None, :, :, :, :] * phase
-    # すべてのマルチパスについて和を取る　式48  
-    a_uvkqyqz = np.sum(a_mnuvkqyqz, (0,1))
+    t_exp_term = torch.exp(-2j * np.pi * t_f.view(1, 1, 1, 1, 1, -1) * t_tau_data.unsqueeze(-1))
+    t_a_mn0 = torch.einsum('vnm, vnm, vnmyzk -> nmvyzk', t_a_MUE_vnm, t_a_phi_theta, t_exp_term)
+    
+    c = np.cos(eta_rad_v) * np.sin(varphi_rad_v)
+    c = np.transpose(c, (1, 2, 0))
+    t_c = torch.tensor(c, device=device, dtype=torch.float64)
+    t_u = torch.tensor(u, device=device, dtype=torch.float64)
+    
+    t_phase = torch.exp(-1j * np.pi * t_u.view(1, 1, -1, 1) * t_c.unsqueeze(2))
+    t_a_mnuv = t_a_mn0.unsqueeze(2) * t_phase.view(N, max(M), U, V, 1, 1, 1)
+    
+    a_uvkqyqz = torch.sum(t_a_mnuv, dim=(0, 1)).cpu().numpy()
+    # ＝＝＝＝ GPU高速化ブロック① 終了 ＝＝＝＝
 
     # 以下ビーム割当###############################################################
     w_DD_pape = np.zeros((V, Q, Q), dtype=np.complex64)
@@ -478,7 +496,13 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     n_dash_uv_vdash = n_dash_uv_full[:, valid, :]
 
     # チャネル行列を計算　式49
-    h_uvk = np.einsum('vyz,uvyzk->uvk', w_DD_pape_red, a_red, optimize=True)  # (V′)
+    # ＝＝＝＝ GPU高速化ブロック② (式49) ＝＝＝＝
+    t_w_DD = torch.tensor(w_DD_pape_red, device=device, dtype=torch.complex128)
+    t_a_red = torch.tensor(a_red, device=device, dtype=torch.complex128)
+    
+    h_uvk = torch.einsum('vyz, uvyzk -> uvk', t_w_DD, t_a_red).cpu().numpy()
+    # ＝＝＝＝ GPU高速化ブロック② 終了 ＝＝＝＝
+    
     if use_H == "E_wo":
         h_uvk = h_uvk + n_dash_uv_vdash[:,:,:,0]  # (U, V′, K)
     
@@ -857,8 +881,8 @@ Pt_mW = 1000/2000  #通信時のサブキャリアごとの基地局送信電力
 P_noise_mW = 6.31e-12 #500kHzあたりの雑音電力
 
 # シミュレーションパラメータ
-d_values = list(range(15, 16, 5))
-Ssub_list = [0]
+d_values = list(range(5, 51, 5))
+Ssub_list = [0, 50, 100]
 
 
 # picked_idx, C_med, idx_list, C_list = pick_typical_channel_by_capacity_totalpaths(
