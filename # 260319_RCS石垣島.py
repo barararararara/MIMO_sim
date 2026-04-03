@@ -496,16 +496,16 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
 
     H_mag_org = np.linalg.norm(h_uvk, axis=(0, 1))  # (K,)
 
-    plt.figure(figsize=(8, 5))
-    plt.plot(H_mag_org)
-    plt.xlabel("Frequency index k")
-    plt.ylabel("|H_bb,k|")
-    title = "Channel amplitude in frequency domain"
-    plt.title(title)
-    plt.grid(True)
-    plt.tight_layout()
-    # channel.save_current_fig_pdf(title)
-    plt.show()
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(H_mag_org)
+    # plt.xlabel("Frequency index k")
+    # plt.ylabel("|H_bb,k|")
+    # title = "Channel amplitude in frequency domain"
+    # plt.title(title)
+    # plt.grid(True)
+    # plt.tight_layout()
+    # # channel.save_current_fig_pdf(title)
+    # plt.show()
 
     # ==================================================
     # ① 対象拡張と 2K IDFT
@@ -546,6 +546,7 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     # マスキング前後の周波数特性の振幅
     H_mag_denoised = np.linalg.norm(H_w_denoised, axis=(0, 1))
 
+    """
     plt.figure(figsize=(8, 5))
     plt.plot(H_mag_org, label="Original", alpha=0.7)
     plt.plot(H_mag_denoised, label="Denoised (Zero-Masked)", linestyle='--')
@@ -592,6 +593,7 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     plt.legend(loc='upper right')
     plt.tight_layout()
     plt.show()
+    """
     
     print(h_uvk)
     
@@ -656,8 +658,8 @@ def sweep_capacity_vs_d_mc(
 
         print(f"Ssub={Ssub_lam}lam done.")
 
-    plot_capacity(results, Ssub_list, return_std=return_std, MC=MC, use_H=use_H, save_folder=save_folder)
-    plot_layers(results, Ssub_list, use_H=use_H, save_folder=save_folder)
+    # plot_capacity(results, Ssub_list, return_std=return_std, MC=MC, use_H=use_H, save_folder=save_folder)
+    # plot_layers(results, Ssub_list, use_H=use_H, save_folder=save_folder)
     return results
 
 
@@ -857,8 +859,8 @@ Pt_mW = 1000/2000  #通信時のサブキャリアごとの基地局送信電力
 P_noise_mW = 6.31e-12 #500kHzあたりの雑音電力
 
 # シミュレーションパラメータ
-d_values = list(range(15, 16, 5))
-Ssub_list = [0]
+d_values = list(range(5, 51, 5))
+Ssub_list = [0, 50, 100]
 
 
 # picked_idx, C_med, idx_list, C_list = pick_typical_channel_by_capacity_totalpaths(

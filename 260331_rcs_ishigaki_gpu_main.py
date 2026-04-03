@@ -1,28 +1,56 @@
 # 260319_RCS石垣島_ゼロマスキング検討
 import numpy as np
-import math
+import Channel_function_gpu as ch_func
 import Channel_functions as channel
 import pandas as pd
-import warnings
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (import for 3D)
-from pathlib import Path
 import torch
+import time
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
 # システムパラメータ
-Q = 16 # 各サブアレーの一辺のアンテナ素子数
-V = 12 # サブアレー数
-U = 8 # UEのアンテナ素子数
-lam_cen = (3.0 * 1e8) / (142 * 1e9)
-f = np.linspace(141.50025*1e9, 142.49975*1e9, 2000) #2000個の周波数
-f_GHz = np.linspace(141.50025, 142.49975, 2000) #GHz単位
-f_GHz_val = f_GHz[1000] #中央周波数
-lam = 0.3 / f_GHz #2000個の波長
-c_ns = 0.3 # 光速 m/ns
+Q = torch.tensor(16, device=device) # 各サブアレーの一辺のアンテナ素子数
+V = torch.tensor(12, device=device) # サブアレー数
+U = torch.tensor(8, device=device) # UEのアンテナ素子数
+# 周波数関連 (2000サブキャリアを一括処理)
+f_GHz = torch.linspace(141.50025, 142.49975, 2000, device=device)
+lam = 0.3 / f_GHz # 波長
+
+# 1. データのロード (ここだけは一旦CPU)
+base_all = np.load("Base_InH_rect.npy", allow_pickle=True).item()
+B = 100 # バッチサイズ
+
+#ベースデータからバッチサイズ分データ取得し、GPUへ転送する関数
+def get_batch_data(base_all, start_idx, b_size, device):
+    end_idx = start_idx + b_size
+    batch = {}
+    
+    # スカラー値や1次元配列の転送 (B,)
+    batch['chi'] = torch.tensor(base_all['chi'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['N']   = torch.tensor(base_all['N'][start_idx:end_idx], device=device, dtype=torch.long)
+    batch['Z']   = torch.tensor(base_all['Z'][start_idx:end_idx], device=device, dtype=torch.float32)
+    
+    # 2次元・3次元配列の転送 (B, N) や (B, N, M)
+    # パディング済みなので、そのまま Tensor 化してバッチ次元を保持できます
+    batch['rho']   = torch.tensor(base_all['rho'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['tau']   = torch.tensor(base_all['tau'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['beta']  = torch.tensor(base_all['beta'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['U_nm']  = torch.tensor(base_all['U'][start_idx:end_idx], device=device, dtype=torch.float32)
+
+    # 角度データ (B, N, M)
+    batch['theta_nd_deg'] = torch.tensor(base_all['theta_ND_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['eta_nd_deg']   = torch.tensor(base_all['eta_ND_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['phi_deg']      = torch.tensor(base_all['phi_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
+    batch['varphi_deg']   = torch.tensor(base_all['varphi_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
+    
+    # 距離依存の計算に必要な「基準角度(0,0)」を取得
+    batch['theta_nd_00'] = batch['theta_nd_deg'][:, 0, 0]
+    batch['eta_nd_00']   = batch['eta_nd_deg'][:, 0, 0]
+    
+    return batch
 
 #################################################################################################################
+# この範囲未修正
 # ビーム割当法２(各サブアレー最大受信電力)
 def Beam_allocation_method_2(Power, threshold, testch_num=0):
     """
@@ -261,600 +289,246 @@ def calc_channel_capacity_SingleLayer(H_all, H_tru_all, Pt_mW, P_noise_mW):
 
 
 ##################################################################################################################
-def setting_NYUSIM_synario(Base_data_num, d):
-    chi = Base_data_num['chi']
-    N = Base_data_num['N']
-    M = Base_data_num['M']
-    Z = Base_data_num['Z']
-    U_nm = Base_data_num['U']
-    rho = Base_data_num['rho']
-    tau = Base_data_num['tau']
-    beta = Base_data_num['beta']
-    theta_ND_deg = Base_data_num['theta_ND_deg']
-    eta_ND_deg = Base_data_num['eta_ND_deg']
+def simulation_core_gpu(base_batch, d, Q, lam, Pu_dBm, Ssub_lam, scenario):
+    """
+    base_data_batch: (B, N, M_max) のテンソル（パディング済み）
+    d: 通信距離 (m)
+    """
+    lam_cen = 0.3 / 142.0 # 中心周波数の波長 (m)
+    
     eta_dir = np.degrees(np.arcsin(1 / d))
     theta_dir = -eta_dir
-    theta_0_0 = theta_ND_deg[0][0] if len(theta_ND_deg[0]) > 0 else theta_ND_deg[0]
-    eta_0_0 = eta_ND_deg[0][0] if len(eta_ND_deg[0]) > 0 else eta_ND_deg[0]
-
-    Delta_EOD = theta_dir - theta_0_0
-    Delta_EOA = eta_dir - eta_0_0
-
-    theta_deg = [theta_ND_deg[n] + Delta_EOD for n in range(N)]
-    eta_deg = [eta_ND_deg[n] + Delta_EOA for n in range(N)]
     
-    NYUSIM_Synario_Data = {
-        'chi': chi,
-        'N': N,
-        'M': M,
-        'Z': Z,
-        'U_nm': U_nm,
-        'rho': rho,
-        'tau': tau,
-        'beta': beta,
-        'phi_deg': Base_data_num['phi_deg'],
-        'theta_deg': theta_deg,
-        'varphi_deg': Base_data_num['varphi_deg'],
-        'eta_deg': eta_deg
-    }
+    delta_EOD = theta_dir - base_batch['theta_ND_00']
+    delta_EOA = eta_dir - base_batch['eta_ND_00']
+    theta_deg = base_batch['theta_ND_deg'] + delta_EOD[:, None, None]
+    eta_deg = base_batch['eta_ND_deg'] + delta_EOA[:, None, None]
     
-    return NYUSIM_Synario_Data
-
-def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use_H):
-    chi = Synario_Data['chi']
-    N = Synario_Data['N']
-    M = Synario_Data['M']
-    Z = Synario_Data['Z']
-    U_nm = Synario_Data['U_nm']
-    rho = Synario_Data['rho']
-    tau = Synario_Data['tau']
-    beta = Synario_Data['beta']
-    phi_deg = Synario_Data['phi_deg']
-    theta_deg = Synario_Data['theta_deg']
-    varphi_deg = Synario_Data['varphi_deg']
-    eta_deg = Synario_Data['eta_deg']
+    # 角度をラジアンに変換 (これ以降の複素平面計算用)
+    theta_rad = torch.deg2rad(theta_deg)
+    eta_rad = torch.deg2rad(eta_deg)
     
-    ##############################################################################
-    # ここからパイロット信号送受信
+    # phi と varphi は d に依存しないため、そのまま転送
+    phi_rad = torch.deg2rad(base_batch['phi_deg'])
+    varphi_rad = torch.deg2rad(base_batch['varphi_deg'])
+    
+##############################################################################
+# ここからパイロット信号送受信
     Pu_mW = 10 ** (Pu_dBm / 10) # mW単位
-    Pu_dBm_per_carrer = 10 * np.log10(Pu_mW / 2000) # UEの1キャリアあたりの送信電力
-    Pu_mW_per_carrer = Pu_mW / 2000 # UEの1キャリアあたりの送信電力mW単位
+    num_carriers = 2000 # サブキャリア数
+    
+    # 1キャリアあたりの送信電力算出
+    Pu_mW_per_carrier = Pu_mW / num_carriers # (スカラまたはB,)
+    Pu_dBm_per_carrier = 10 * torch.log10(torch.tensor(Pu_mW_per_carrier, device=device))
 
-    # 受信電力計算
+    # 受信電力計算    
+    Pr_dBm = ch_func.calc_Pr_batched(lam, d, base_batch['chi'], scenario, Pu_dBm=10, do=1.0) # (B,)
+    Pr_dBm_per_carrier = Pr_dBm - 10 * np.log10(num_carriers)
+    t_nm = ch_func.abs_timedelays_batched(d, base_batch)
     
-    theta_rad = np.zeros((N,max(M)))
-    phi_rad = np.zeros((N,max(M)))
-    varphi_rad = np.zeros((N,max(M)))
-    eta_rad = np.zeros((N,max(M)))
-    
-    phi_rad_v = np.zeros((V,N,max(M)))
-    theta_rad_v = np.zeros((V,N,max(M)))
-    varphi_rad_v = np.zeros((V,N,max(M)))
-    eta_rad_v = np.zeros((V,N,max(M)))
-    
-    for n in range(N):
-        for m in  range(M[n]):
-            theta_rad[n][m] = np.radians(theta_deg[n][m])
-            phi_rad[n][m] = np.radians(phi_deg[n][m])
-            varphi_rad[n][m] = np.radians(varphi_deg[n][m])
-            eta_rad[n][m] = np.radians(eta_deg[n][m])
-    
-    
-    Pr_dBm = channel.calc_Pr(lam_cen, d, chi, Pu_dBm, channel_type, do=1)
-    Pr_dBm_each_career = channel.calc_Pr_each_career(lam_cen, d, chi, Pu_dBm_per_carrer, channel_type, do=1)
-    t_nm = channel.abs_timedelays(d, rho, tau, N, M)
-    
-    R, MUE_coordinate  = channel.Mirror_UE_positions(d, N, M, rho, tau, phi_rad, theta_rad)
-    
-    # サブアレー各素子の座標wideversion
-    subarray_v_qy_qz = channel.calc_anntena_xyz_Ssub(lam_cen, V, Q, Ssub_lam)
-    # サブアレーの各素子をプロットしたグラフ
-    # plot_subarray_antennas(subarray_v_qy_qz)
-    
-    D_subarray, Rayleigh_distance = channel.calc_Rayleigh_distance(subarray_v_qy_qz)
-    print(f"Rayleigh_distance: {Rayleigh_distance} m, D_subarray: {D_subarray} m")
-    
+    # 端末の鏡像体の座標
+    R, MUE_coordinate  = ch_func.Mirror_UE_positions_batched(d, base_batch, theta_rad, phi_rad)
+    # サブアレー各素子のSsub含む座標
+    subarray_v_qy_qz = ch_func.calc_anntena_xyz_Ssub_gpu(lam_cen, V, Q, Ssub_lam, device='cuda')
+
     # n番目のTCのm番目のUE鏡像体#0と，v番目のサブアレーのqy, qz番目のアンテナ素子間の距離をrm,n,v, qy, qz 式14
-    r_mnv0qyqz = channel.distance_to_eachanntena(MUE_coordinate, subarray_v_qy_qz, N, M, V, Q)
+    r_mnv0qyqz = ch_func.distance_to_eachanntena_batched(MUE_coordinate, subarray_v_qy_qz) # (B, N, M, V, Q, Q)
     # UEの#0から各アンテナ素子への伝搬時間 ㉓
-    tau_mnv0qyqz = r_mnv0qyqz / c_ns 
-    phi_deg_v, theta_deg_v = channel.calc_each_subarray_AOD_EOD(N, M, MUE_coordinate, subarray_v_qy_qz, V)
-    
-    for v in range(V):
-        for n in range(N):
-            for m in range(M[n]):
-                phi_rad_v[v, n, m]    = np.radians(phi_deg_v[v][n][m])
-                theta_rad_v[v, n, m]  = np.radians(theta_deg_v[v][n][m])
-                varphi_rad_v[v, n, m] = np.radians(varphi_deg[n][m] - phi_deg[n][m] + phi_deg_v[v][n][m])
-                eta_rad_v[v, n, m]    = np.radians(eta_deg[n][m]    + theta_deg[n][m] - theta_deg_v[v][n][m])
+    tau_mnv0qyqz = r_mnv0qyqz / 0.3
+    # サブアレー毎のAODとEODを計算
+    phi_rad_v, theta_rad_v, varphi_rad_v, eta_rad_v = ch_func.calc_all_angles_batched(base_batch, MUE_coordinate, subarray_v_qy_qz) # (B, V, N, M)
 
-    t_nm = channel.abs_timedelays(d, rho, tau, N, M) #絶対遅延
-    P_mW = channel.cluster_power(Pr_dBm, N, tau, Z, channel_type)
-    Pi_mW = channel.SP_power(N, M, P_mW, rho, U_nm, channel_type)
-    print("Pi_mW:", Pi_mW)
-    P_each_career_mW = channel.cluster_Power_each_career(Pr_dBm_each_career, Z, N, tau, channel_type)
-    Pi_each_career_mW = channel.SP_Power_each_career(N, M, P_each_career_mW, rho, U_nm, channel_type)
+    Pi_mW = ch_func.calc_Pi_mW_batched(Pr_dBm, base_batch['Z'], base_batch['N'], base_batch['tau'], scenario) # (B, N, M)
+    Pi_mW_per_carrier = Pi_mW / num_carriers # (B, N, M)
     
-    DFT_weights = channel.DFT_weight_calc(Q)
+    DFT_weights = ch_func.DFT_weight_calc_gpu(Q) # (Q, Q, Q, Q)
+    
+    b_varphi_eta_v = ch_func.define_b_phi_eta_batched(eta_rad_v) # (B, V, N, M)
+    Amp_per_carrier = torch.sqrt(Pi_mW_per_carrier)
     
 
-    b_varphi_eta = channel.define_b_verphi_eta(N, M, eta_rad)
-    Amp_per_career_mW = np.sqrt(Pi_each_career_mW)
+    a_phi_theta_v = ch_func.define_a_batched(V, phi_rad, theta_rad) # (B, V, N, M)
+    
+    # --- 5. 複素振幅の合成 (ここが「GPU高速化ブロック⓪」のバッチ化) ---
+    # 初期位相 beta (B, N, M)
+    beta_rad = base_batch['beta_rad'] 
+    
+    # パイロット信号成分 (B, V, N, M)
+    # Amp(B,N,M) * exp(j*beta) * b_gain(B,V,N,M) * a_gain(B,V,N,M)
+    # ※次元を合わせて一気に掛け算
+    pilot_signal = Amp_per_carrier.unsqueeze(1) * torch.exp(1j * beta_initial).unsqueeze(1) * b_varphi_eta_v * a_phi_theta_v
+
+    # 位相回転項の生成 (B, N, M, V, Q, Q, K)
+    # r_mnv0qyqz (B, N, M, V, Q, Q) / 0.3ns
+    tau = r_mnv0qyqz / 0.3  # (B, N, M, V, Q, Q)
+    
+    # 巨大テンソルのメモリ節約のため、複素単精度(complex64)を使用
+    # (B, N, M, V, Q, Q, 1) * (1, 1, 1, 1, 1, 1, K)
+    phase_term = torch.exp(-2j * torch.pi * f_GHz.view(1, 1, 1, 1, 1, 1, -1) * tau.unsqueeze(-1))
+
+    # --- 6. アンテナ素子ごとの信号合成 (einsum) ---
+    # pilot_signal: bvnm
+    # phase_term: bnmvyzk
+    # n, m 次元（クラスタとサブパス）で和をとって消す
+    # 結果: (B, V, K, Q, Q)
+    complex_Amp_antena = torch.einsum('bvnm, bnmvyzk -> bvkyz', pilot_signal, phase_term)
+
+    # --- 1. 雑音の生成 (B, V, K) ---
+    # B: バッチサイズ, V: サブアレー数(12), num_carriers: 周波数波(2000)
+    n_k_v = ch_func.noise_n_k_v_batched(B, V, num_carriers, device)
+
+    # --- 2. BF後の受信電力算出 (B, V, Q, Q) ---
+    # DFT_weights: (Q, Q, Q, Q) -> ビーム辞書
+    # complex_amp_antena: (B, V, K, Q, Q) -> 各素子の複素振幅
+    # 戻り値 P_sub_dash_dBm は (B, V, 16, 16) の形状
+    P_sub_dash_dBm = ch_func.near_Power_inc_noise_batched(V, Q, DFT_weights, complex_Amp_antena, n_k_v)
     
 
-    complex_Amp_at_MUE = []
-    for n in range(N):
-        mlen = int(M[n])
+# ここまでパイロット信号受信電力計算
+#############################################################################
+# ここからチャネル計算
+    
+    Amp_desital = torch.sqrt(Pi_mW) / torch.sqrt(Pu_mW).view(-1, 1, 1)
 
-        amp = Amp_per_career_mW[n, :mlen]      # (mlen,)
-        ph  = np.exp(1j * beta[n])          # (mlen,)
-        bve = np.array(b_varphi_eta[n])[:mlen]  # ★ここ追加 (mlen,)
+    # beta: (B, N, M) ※初期位相
+    a_MUE_vnm = Amp_desital.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v
 
-        complex_Amp_at_MUE.append(amp * ph * bve)
-
-    a_phi_theta = channel.define_a(V, N, M, phi_rad_v, theta_rad_v,NF_setting)
-    
-    # ＝＝＝＝ GPU高速化ブロック⓪ (パイロット信号) ＝＝＝＝
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Mの長さを揃えた Numpy 配列を作る
-    c_Amp_MUE_pad = np.zeros((N, max(M)), dtype=np.complex128)
-    for n in range(N):
-        c_Amp_MUE_pad[n, :len(complex_Amp_at_MUE[n])] = complex_Amp_at_MUE[n]
-        
-    t_c_Amp = torch.tensor(c_Amp_MUE_pad, device=device, dtype=torch.complex128)
-    t_a_phi = torch.tensor(a_phi_theta, device=device, dtype=torch.complex128)
-    t_tau   = torch.tensor(r_mnv0qyqz / c_ns, device=device, dtype=torch.float64) 
-    t_f     = torch.tensor(f_GHz, device=device, dtype=torch.float64)
-    
-    t_pilot = t_c_Amp.unsqueeze(0) * t_a_phi # (V, N, M)
-    t_exp_pilot = torch.exp(-2j * np.pi * t_f.view(1, 1, 1, 1, 1, -1) * t_tau.unsqueeze(-1)) 
-    
-    t_complex_Amp_ant = torch.einsum('vnm, vnmyzk -> vkyz', t_pilot, t_exp_pilot)
-    complex_Amp_at_each_antena = t_complex_Amp_ant.cpu().numpy()
-    # ＝＝＝＝ GPU高速化ブロック⓪ 終了 ＝＝＝＝
-    
-    n_k_v = channel.noise_n_k_v(V)
-    P_sub_dash_dBm = channel.near_Power_inc_noise_optimized(V, Q, f, DFT_weights, complex_Amp_at_each_antena, n_k_v)
-    
-
-    # ここまでパイロット信号受信電力計算##############################################################
-    # ここからチャネル計算
-    
-    # チャネルモデルに合わせて振幅１の複素振幅
-    # (本来はサブキャリアごとに異なるが、ここでは代表値として中央周波数で計算)
-    Amp_desital = np.sqrt(Pi_mW) / np.sqrt(Pu_mW)
-    K = len(f)
-    
-    b_varphi_eta = channel.define_b_verphi_eta(N, M, eta_rad)
-    b_varphi_eta_v = channel.define_b_verphi_eta_v(V, N, M, eta_rad_v)
-    
-    u = np.arange(U)  # shape: (U,)
-    # ベータのデータ形式をnumpy配列に変換
-    beta_tmp = np.zeros((N,max(M)))
-    for i, values in enumerate(beta):
-        beta_tmp[i, :len(values)] = values  # 長さが足りない部分はそのままゼロ
-    beta = np.array(beta_tmp)
-    t_nm_tmp = np.zeros((N,max(M)))
-    for i, values in enumerate(t_nm):
-        t_nm_tmp[i, :len(values)] = values  # 長さが足りない部分はそのままゼロ
-    t_nm = np.array(t_nm_tmp)
-    
-    b_varphi_eta = np.array(b_varphi_eta)
-    
-    a_MUE_vnm = Amp_desital * np.exp(1j * beta) * b_varphi_eta_v
-    
     lam = 0.3 / f_GHz
 
-    # ＝＝＝＝ GPU高速化ブロック① (式47・48) ＝＝＝＝
-    t_a_MUE_vnm   = torch.tensor(a_MUE_vnm, device=device, dtype=torch.complex128)
-    t_a_phi_theta = torch.tensor(a_phi_theta, device=device, dtype=torch.complex128)
-    t_tau_data    = torch.tensor(tau_mnv0qyqz, device=device, dtype=torch.float64) 
-    
-    t_exp_term = torch.exp(-2j * np.pi * t_f.view(1, 1, 1, 1, 1, -1) * t_tau_data.unsqueeze(-1))
-    t_a_mn0 = torch.einsum('vnm, vnm, vnmyzk -> nmvyzk', t_a_MUE_vnm, t_a_phi_theta, t_exp_term)
-    
-    c = np.cos(eta_rad_v) * np.sin(varphi_rad_v)
-    c = np.transpose(c, (1, 2, 0))
-    t_c = torch.tensor(c, device=device, dtype=torch.float64)
-    t_u = torch.tensor(u, device=device, dtype=torch.float64)
-    
-    t_phase = torch.exp(-1j * np.pi * t_u.view(1, 1, -1, 1) * t_c.unsqueeze(2))
-    t_a_mnuv = t_a_mn0.unsqueeze(2) * t_phase.view(N, max(M), U, V, 1, 1, 1)
-    
-    a_uvkqyqz = torch.sum(t_a_mnuv, dim=(0, 1)).cpu().numpy()
-    # ＝＝＝＝ GPU高速化ブロック① 終了 ＝＝＝＝
 
-    # 以下ビーム割当###############################################################
-    w_DD_pape = np.zeros((V, Q, Q), dtype=np.complex64)
-    invalid_indices = []  # vの削除対象インデックスを格納するリスト
+    # 入力: a_MUE_vnm(B,V,N,M), a_phi_theta(B,V,N,M), tau_mnv0qyqz(B,N,M,V,Q,Q), f_ghz(K), u(U)
+    # 伝搬遅延による位相回転項 (B, N, M, V, Q, Q, K)
+    # メモリ節約のため complex64（複素単精度）を強く推奨
+    exp_term = torch.exp(-2j * torch.pi * f_GHz.view(1, 1, 1, 1, 1, 1, -1) * tau_mnv0qyqz.unsqueeze(-1))
 
-    # 各サブアレーの最大受信電力を優先してビーム割当
-    threshold = -73 # ビーム割当の閾値
-    ba, row = Beam_allocation_method_2(P_sub_dash_dBm, threshold, testch_num=0)
-    print(ba)
-    
-    invalid_indices = []  # 各wごとに初期化
-    v = 0  # v をループ内で一意に管理
-    for face in range(3):
-        for array in range(4):
-            pa = ba[face, 0, array]
-            pe = ba[face, 1, array]
-            if pa == -100 and pe == -100:
-                invalid_indices.append(v)  # 削除対象のvを記録
-            elif pa == -1 and pe == -1:
-                invalid_indices.append(v)
-            else:
-                w_DD_pape[v,:,:] = channel.DFT_weight_calc_pape(Q, pa, pe)
-            v += 1  # ループごとに v を増加
+    # UE側のアンテナ素子位置による位相項 (B, V, N, M, U)
+    c = torch.cos(eta_rad_v) * torch.sin(varphi_rad_v) # (B, V, N, M)
+    ue_phase = torch.exp(-1j * torch.pi * u.view(1, 1, 1, 1, -1) * c.unsqueeze(-1))
 
-    # vの次元を削除して V' にする
-    valid = np.setdiff1d(np.arange(V), invalid_indices)  # 残すvのインデックス
-    w_DD_pape_red = w_DD_pape[valid]      # (V′,Q,Q)
-    a_red = a_uvkqyqz[:,valid,:,:,:]  # (U, V′, Q, Q, K)
-    n_dash_uv_full = channel.noise_dash_K_10(U, V)
-    n_dash_uv_vdash = n_dash_uv_full[:, valid, :]
+    # 全パスを合成してチャネル行列を算出 (B, U, V, K, Q, Q)
+    # a_MUE_vnm: bvnm, a_phi_theta: bvnm, ue_phase: bvnmu, exp_term: bnmvyzk
+    a_uvkqyqz = torch.einsum('bvnm, bvnm, bvnmu, bnmvyzk -> buvkyz', 
+                            a_MUE_vnm, a_phi_theta_v, ue_phase, exp_term)
+    
+    """
+    ここまで修正完了
+    """
 
-    # チャネル行列を計算　式49
-    # ＝＝＝＝ GPU高速化ブロック② (式49) ＝＝＝＝
-    t_w_DD = torch.tensor(w_DD_pape_red, device=device, dtype=torch.complex128)
-    t_a_red = torch.tensor(a_red, device=device, dtype=torch.complex128)
+    ###############################################################]
+    # 以下ビーム割当
+    threshold_dBm = -73
+    # --- 1. 各サブアレー内での最強ビームを抽出 (B, V) ---
+    # (B, V, 256) に平坦化して最大電力を取得
+    P_max_per_sub, flat_beam_idx = torch.max(P_sub_dash_dBm.view(B, V, -1), dim=2)
+
+    # 各サブアレーの最強ビーム座標 (pa, pe) を保持
+    best_pa = flat_beam_idx // Q  # (B, V)
+    best_pe = flat_beam_idx % Q   # (B, V)
+
+    # --- 2. スレショルド判定と V' の決定 ---
+    # threshold_dBm (スカラー) 以上の電力を持つサブアレーを True にする
+    # active_mask の形状は (B, V)
+    active_mask = P_max_per_sub > threshold_dBm
+
+    # 各バッチにおける有効なサブアレー数 V_prime をカウント (B,)
+    V_prime = torch.sum(active_mask.long(), dim=1)
+
+    # --- 3. スレショルド以下のビーム情報を「切り捨てる」 ---
+    # 無効なサブアレーの pa, pe を -1 (または 0) に埋める、あるいは電力自体を消す
+    # ※後の計算でこの mask を使って信号を 0 にするのが一番盤石です
+    best_pa_filtered = torch.where(active_mask, best_pa, torch.tensor(-1, device=device))
+    best_pe_filtered = torch.where(active_mask, best_pe, torch.tensor(-1, device=device))
+    P_max_filtered = torch.where(active_mask, P_max_per_sub, torch.tensor(-float('inf'), device=device))
     
-    h_uvk = torch.einsum('vyz, uvyzk -> uvk', t_w_DD, t_a_red).cpu().numpy()
-    # ＝＝＝＝ GPU高速化ブロック② 終了 ＝＝＝＝
-    
+    # --- 1. 選ばれたビームに対応する DFTウェイトの抽出 (B, V, Q, Q) ---
+    # DFT_weights: (Q, Q, Q, Q) -> (pa, pe, qy, qz)
+    # best_pa, best_pe: (B, V) -> 各サブアレーの最強ビーム番号
+
+    # 全体から必要な pa, pe の組み合わせだけを抜き出す
+    # (B, V, Q, Q) の形状で、各サブアレーに適用すべき 16x16 のウェイトを保持
+    # まず pa を選択
+    w_DD_pa = DFT_weights[best_pa] # (B, V, Q, Q, Q)
+    # 次に その中から pe を選択 (少し特殊なインデックス操作)
+    w_DD_selected = DFT_weights[best_pa, best_pe] # (B, V, Q, Q)
+
+    # --- 2. チャネル行列 h_uvk の計算 (einsum) ---
+    # a_uvkqyqz: (B, U, V, K, Q, Q) -> 全アンテナ素子の複素振幅
+    # w_DD_selected: (B, V, Q, Q) -> 選ばれたビームのウェイト
+    # 結果形状: (B, U, V, K)
+    h_uvk = torch.einsum('bvyz, buvkyz -> buvk', w_DD_selected, a_uvkqyqz)
+
+    # --- 3. 雑音生成と有効サブアレー V' への適用 ---
+    # 雑音 n_dash_uv_full: (B, U, V, K) 
+    # ここでも標準偏差 sigma_dash を使って一括生成
+    sigma_dash = 1.778 * 1e-6 # 仮の定数
+    n_dash_real = torch.randn((B, U, V, K), device=device) * sigma_dash
+    n_dash_imag = torch.randn((B, U, V, K), device=device) * sigma_dash
+    n_dash_uv_full = torch.complex(n_dash_real, n_dash_imag)
+
+    # --- 4. スレショルド判定 (active_mask) に基づく処理 ---
+    # 前のステップで作った active_mask (B, V) を活用
+    # (B, V) を (B, 1, V, 1) に拡張してブロードキャスト
+    mask_expanded = active_mask.view(B, 1, V, 1)
+    # 無効なサブアレーの成分を 0 にする
+    h_uvk_filtered = h_uvk * mask_expanded
+
     if use_H == "E_wo":
-        h_uvk = h_uvk + n_dash_uv_vdash[:,:,:,0]  # (U, V′, K)
-    
-###########################################################################################################################.
-    h_uvk *= np.exp(1j * 2 * np.pi * f_GHz[None, None, :]*t_nm[0, 0])
-
-    # 周波数軸
-    f_Hz = f_GHz * 1e9
-    K = f_Hz.size
-    df = f_Hz[1] - f_Hz[0]
-
-    # 遅延軸（IFFTの遅延サンプル位置）
-    tau = np.arange(K) / (K * df)      # [s]
-    tau_ns = tau * 1e9                 # [ns]
-
-    H_mag_org = np.linalg.norm(h_uvk, axis=(0, 1))  # (K,)
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(H_mag_org)
-    plt.xlabel("Frequency index k")
-    plt.ylabel("|H_bb,k|")
-    title = "Channel amplitude in frequency domain"
-    plt.title(title)
-    plt.grid(True)
-    plt.tight_layout()
-    # channel.save_current_fig_pdf(title)
-    plt.show()
-
-    # ==================================================
-    # ① 対象拡張と 2K IDFT
-    # ==================================================
-    # H(0)...H(K-1) の後ろに H(K-1)...H(0) を結合して 2K ポイントにする
-    # [..., ::-1] は最後の次元（K）を逆順にする Python のスライス操作です
-    H_w_rev = h_uvk[..., ::-1]
-    H_w_2K = np.concatenate([h_uvk, H_w_rev], axis=-1)  # shape: (U, V', 2K)
-
-    # 2K IDFT を実行
-    h_tau_2K = np.fft.ifft(H_w_2K, axis=-1)
-
-    # ==================================================
-    # ② ゼロマスキング (100 ns ～ 1900 ns)
-    # ==================================================
-    # 拡張前の遅延軸における 100 ns のインデックス L を計算
-    # 元の遅延分解能 dt = 1 / (K * df)
-    dt = 1.0 / (K * df)
-    L = int(np.round(100e-9 / dt))  # 100 ns に対応するインデックス
-
-    # 指定通り、h^(2L) ～ h^(2K - 1 - 2L) を 0 に置き換える
-    h_tau_2K_masked = h_tau_2K.copy()
-    # Pythonのスライスは終端を含まないため、後ろのインデックスは 2*K - 2*L とします
-    h_tau_2K_masked[..., 2*L : 2*K - 2*L] = 0
-
-    # ==================================================
-    # ③ 2K DFT と前半部分の抽出 (雑音抑圧チャネルの取得)
-    # ==================================================
-    # DFT を適用
-    H_w_2K_masked = np.fft.fft(h_tau_2K_masked, axis=-1)
-
-    # 前半 K ポイント分を取り出し、雑音抑圧されたチャネルとする
-    H_w_denoised = H_w_2K_masked[..., :K]  # shape: (U, V', K)
-
-    # ==================================================
-    # ④ 結果の比較プロット（おまけ：マスキングの効果確認）
-    # ==================================================
-    # マスキング前後の周波数特性の振幅
-    H_mag_denoised = np.linalg.norm(H_w_denoised, axis=(0, 1))
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(H_mag_org, label="Original", alpha=0.7)
-    plt.plot(H_mag_denoised, label="Denoised (Zero-Masked)", linestyle='--')
-    plt.xlabel("Frequency index k")
-    plt.ylabel("|H_bb,k|")
-    plt.title("Channel amplitude in frequency domain (Comparison)")
-    plt.legend(loc='upper right')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-    
-# ==================================================
-    # （修正版）時間領域・遅延プロファイルのプロット（絶対値表記）
-    # ==================================================
-    # 2Kポイントの遅延軸（ns）を作成
-    dt_2K = 1.0 / (2 * K * df)
-    tau_2K_ns = np.arange(2 * K) * dt_2K * 1e9
-
-    # 空間次元（U, V'）にわたってノルム（振幅・絶対値）をとる
-    h_mag_2K = np.linalg.norm(h_tau_2K, axis=(0, 1))               # マスキング前
-    h_mag_2K_masked = np.linalg.norm(h_tau_2K_masked, axis=(0, 1)) # マスキング後
-
-    # グラフ描画
-    plt.figure(figsize=(8, 5))
-    # 絶対値をそのままプロット
-    plt.plot(tau_2K_ns, h_mag_2K, label="Original (with Noise)", color='tab:red', alpha=0.7)
-    plt.plot(tau_2K_ns, h_mag_2K_masked, label="Masked (Denoised)", color='tab:blue', linestyle='--')
-    
-    # ゼロマスキングした範囲（100ns ～ 1900ns）を背景色で強調（オプション）
-    # plt.axvspan(100, 1900, color='gray', alpha=0.2, label="Masked Region")
-
-    plt.xlabel("Delay [ns]")
-    plt.ylabel("Amplitude |h(τ)|")  # 縦軸のラベルを絶対値表記に変更
-    plt.title("Delay Profile in Time Domain (Absolute Value)")
-    
-    # 横軸の表示範囲（1000nsまで）
-    plt.xlim(-50, 2050)
-    plt.xticks([0, 100, 500, 1000, 1500, 1900, 2000], fontsize="small")
-    
-    # 縦軸は0からスタートさせ、上は自動調整（ピークより少し上まで）
-    plt.ylim(bottom=0)
-    
-    plt.grid(True, linestyle=':')
-    plt.legend(loc='upper right')
-    plt.tight_layout()
-    plt.show()
-    
-    print(h_uvk)
-    
-    return h_uvk, H_w_denoised, ba
-
-
-def sweep_capacity_vs_d_mc(
-    channel_indices,
-    channel_type, Q, lam,
-    d_values, Ssub_list,
-    base_seed, MC,
-    Base_data,
-    Pu_dBm,
-    Pt_mW, P_noise_mW,
-    use_H="T",
-    return_std=True,
-    save_folder=None
-):
-    results = {}
-
-    for Ssub_lam in Ssub_list:
-        results[Ssub_lam] = {
-            "d": [],
-            "C_mean": [],
-            "C_std": [],
-            "C_single_mean": [],
-            "C_single_std": [],
-            "Ly": [],
-        }
-
-        for d in d_values:
-            C_list = []
-            C_single_list = []
-            Ly_list = []
-
-            for testch_num in channel_indices:
-                np.random.seed(base_seed + testch_num)
-
-                Synario_Data = setting_NYUSIM_synario(Base_data[testch_num], d)
-                H, H_use, ba = simulation_core(
-                    channel_type, Q, lam, d, Pu_dBm,Ssub_lam,
-                    Synario_Data, use_H=use_H
-                )
-                
-                C, Ly, _ = calc_channel_capacity(H_use, H, Pt_mW, P_noise_mW)
-                C_single, _, _ = calc_channel_capacity_SingleLayer(H_use, H, Pt_mW, P_noise_mW)
-
-                C_list.append(C)
-                C_single_list.append(C_single)
-                Ly_list.append(Ly)
-
-            C_arr = np.asarray(C_list, float)
-            C1_arr = np.asarray(C_single_list, float)
-            Ly_arr = np.asarray(Ly_list, float)
-
-            results[Ssub_lam]["d"].append(d)
-            results[Ssub_lam]["C_mean"].append(C_arr.mean())
-            results[Ssub_lam]["C_std"].append(C_arr.std(ddof=1) if len(C_arr) >= 2 else 0.0)
-            results[Ssub_lam]["C_single_mean"].append(C1_arr.mean())
-            results[Ssub_lam]["C_single_std"].append(C1_arr.std(ddof=1) if len(C1_arr) >= 2 else 0.0)
-            results[Ssub_lam]["Ly"].append(Ly_arr.mean())
-
-        print(f"Ssub={Ssub_lam}lam done.")
-
-    plot_capacity(results, Ssub_list, return_std=return_std, MC=MC, use_H=use_H, save_folder=save_folder)
-    plot_layers(results, Ssub_list, use_H=use_H, save_folder=save_folder)
-    return results
-
-
-def plot_capacity(results, Ssub_list, return_std=False, MC=1, use_H="T", save_folder=None):
-    plt.rcParams.update({
-        "font.family": "Times New Roman",
-        "mathtext.fontset": "stix",    # ← これが「本物の斜体」の鍵です！
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
-    })
-    fig, ax = plt.subplots(figsize=(3.5, 2.6), constrained_layout=True)
-
-    if use_H == "T":
-        title_str = "Channel Capacity vs BS-UE Distance (True Channel)"
-    elif use_H == "E_w":
-        title_str = "Channel Capacity vs BS-UE Distance (Estimated Channel W/ NS)"
-    elif use_H == "E_wo":
-        title_str = "Channel Capacity vs BS-UE Distance (Estimated Channel W/o NS)"
-
-    color_map = {0:"tab:green", 50:"tab:blue"}
-    default_color = "tab:red"
-
-    for Ssub_lam in Ssub_list:
-        d = results[Ssub_lam]["d"]
-        Cm = results[Ssub_lam]["C_mean"]
-        Cs = results[Ssub_lam]["C_std"]
-        C1 = results[Ssub_lam]["C_single_mean"]
-
-        color = color_map.get(Ssub_lam, default_color)
-
-        ax.plot(d, Cm, marker="o", markersize=4.5, lw=1.6, color=color, label=fr"{Ssub_lam}$\lambda$ Multi")
-        ax.plot(d, C1, marker="s", markersize=4.5, ls="--", lw=1.6, color=color, markerfacecolor="none", label=fr"{Ssub_lam}$\lambda$ Single")
-
-        if return_std and MC >= 2:
-            ax.fill_between(d, Cm-Cs, Cm+Cs, color=color, alpha=0.15)
-
-    ax.set_xlabel("BS-UE Distance (m)")
-    ax.set_ylabel("Channel Capacity (bps/Hz)")
-    ax.set_ylim(0, 60)
-    ax.grid(True)
-    ax.legend(title=r"$S_\mathrm{sub}$ Layer")
-
-    ax.set_title("")
-
-    if save_folder is not None:
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
-        
-        ax.set_title(title_str, size=15)
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Slide",)) #←　カンマ必須！！！
-
-    plt.show()
-    plt.close(fig)
-    
-def plot_layers(results, Ssub_list, use_H="T", save_folder=None):
-    plt.rcParams.update({
-        "font.family": "Times New Roman",
-        "mathtext.fontset": "stix",    # ← これが「本物の斜体」の鍵です！
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
-    })
-    fig, ax = plt.subplots(figsize=(3.5, 2.6), constrained_layout=True)
-
-    if use_H == "T":
-        title_str = "Number of Layers vs BS-UE Distance (True Channel)"
-    elif use_H == "E_w":
-        title_str = "Number of Layers vs BS-UE Distance (Estimated Channel W/ NS)"
-    elif use_H == "E_wo":
-        title_str = "Number of Layers vs BS-UE Distance (Estimated Channel W/o NS)"
-
-    color_map = {0:"tab:green", 50:"tab:blue"}
-    default_color = "tab:red"
-    offset = {0:-0.4, 50:0.0, 100:+0.4}
-    for Ssub_lam in Ssub_list:
-        d0 = np.array(results[Ssub_lam]["d"], float)
-        d  = d0 + offset.get(Ssub_lam, 0.0)
-        Ly = np.array(results[Ssub_lam]["Ly"], float)
-
-        color = color_map.get(Ssub_lam, default_color)
-
-        ax.plot(d, Ly, lw=1.6, color=color, zorder=1)
-        ax.scatter(
-            d, Ly,
-            marker="o",
-            s=35,
-            facecolors="white",
-            edgecolors=color,
-            linewidths=1.2,
-            zorder=2,
-            label=fr"{Ssub_lam}$\lambda$"
-        )
-
-
-        ax.set_xlabel("BS-UE Distance (m)")
-        ax.set_ylabel("Number of Layers")
-        ax.set_ylim(0, 8.5)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.grid(True, linewidth=0.4, alpha=0.3)
-        ax.legend(title=r"$S_\mathrm{sub}$")
-
-    ax.set_title("")
-
-    if save_folder is not None:
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
-        
-        ax.set_title(title_str, size=15)
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Slide",)) #←　カンマ必須！！！
-
-    plt.show()
-    plt.close(fig)
-
-def plot_eigs(results, Ssub_list, k_list=(1,2), use_H="T", save_folder=None):
-    fig, ax = plt.subplots(constrained_layout=True)
-
-    if use_H == "T":
-        title_str = "Eigenvalues vs BS-UE Distance (True Channel)"
-    elif use_H == "E_w":
-        title_str = "Eigenvalues vs BS-UE Distance (Estimated Channel W/ NS)"
-    elif use_H == "E_wo":
-        title_str = "Eigenvalues vs BS-UE Distance (Estimated Channel W/o NS)"
+        # 雑音を加えて、かつ無効なサブアレーを 0 に落とす
+        h_uvk_final = (h_uvk_filtered + n_dash_uv_full) * mask_expanded
     else:
-        title_str = "Eigenvalues vs BS-UE Distance"
+        h_uvk_final = h_uvk_filtered
 
-    color_map = {0:"tab:green", 50:"tab:blue"}
-    default_color = "tab:red"
-    ls_map = {1:"-", 2:"--", 3:":", 4:"-."}  # λ1,λ2,...で線種変える
+# ここまでチャネル計算
+###########################################################################################################################
+# ここからゼロマスキング
+    # --- 1. 位相回転の補正 (B, U, V, K) ---
+    # t_nm_min: 各バッチの最小遅延 (B,) を想定。
+    # t_nm は以前のステップで出した (B, N, M) の中から最短パス [:, 0, 0] を抽出
+    t_nm_min = t_nm[:, 0, 0].view(B, 1, 1, 1) 
+    h_uvk = h_uvk * torch.exp(1j * 2 * torch.pi * f_GHz.view(1, 1, 1, -1) * t_nm_min)
 
-    for Ssub_lam in Ssub_list:
-        d = np.array(results[Ssub_lam]["d"], float)
-        eig_mean_list = results[Ssub_lam]["eig_mean"]  # list of (Nt,)
-        eig_mat = np.vstack(eig_mean_list)             # (len(d), Nt)
+    # --- 2. 2K IDFT の準備 ---
+    df = (f_GHz[1] - f_GHz[0]) # 周波数ステップ
+    K = f_GHz.size(0)
 
-        color = color_map.get(Ssub_lam, default_color)
+    # H(K) の後ろに逆順にしたものを結合して 2K ポイントにする
+    # torch.flip で最後の次元 (K) を反転
+    h_w_rev = torch.flip(h_uvk, dims=[-1])
+    h_w_2k = torch.cat([h_uvk, h_w_rev], dim=-1) # (B, U, V, 2K)
 
-        for k in k_list:
-            if k-1 >= eig_mat.shape[1]:
-                continue
-            ax.plot(d, eig_mat[:, k-1],
-                    lw=2.2, color=color, ls=ls_map.get(k, "-"),
-                    marker=None,
-                    label=f"Ssub={Ssub_lam}λ, λ{k}")
+    # 2K IDFT を実行 (最後の次元に対して適用)
+    h_tau_2k = torch.fft.ifft(h_w_2k, dim=-1)
 
-    ax.set_xlabel("BS-UE Distance [m]", size=12)
-    ax.set_ylabel("Eigenvalue", size=12)
-    ax.set_yscale("log")  # ★必須（桁が違いすぎる）
-    ax.grid(True, which="both")
-    ax.tick_params(labelsize=11)
-    ax.legend(fontsize=9)
+    # --- 3. ゼロマスキング (100 ns ～ 1900 ns) ---
+    dt = 1.0 / (K * df)
+    L = int(round(100e-9 / dt)) # 100ns に対応するインデックス
 
-    ax.set_title("")
+    # マスク処理：中間の高遅延成分を 0 にする
+    # バッチ次元を維持したままスライスで 0 を代入
+    # h_tau_2k_masked はコピーを作ってから処理
+    h_tau_2k_masked = h_tau_2k.clone()
+    h_tau_2k_masked[..., 2*L : 2*K - 2*L] = 0
 
-    if save_folder is not None:
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall"), folder=save_folder, variants=("Paper",))
-        ax.set_title(title_str, size=15)
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall"), folder=save_folder, variants=("Slide",))
+    # --- 4. 2K DFT とデノイズ結果の抽出 ---
+    h_w_2k_masked = torch.fft.fft(h_tau_2k_masked, dim=-1)
 
-    plt.show()
-    plt.close(fig)
+    # 前半 K ポイントを取り出して、ノイズ抑制後のチャネルとする
+    h_w_denoised = h_w_2k_masked[..., :K] # (B, U, V, K)
+
+    # --- 5. 評価用：電力（ノルム）の計算 (B, K) ---
+    # 空間次元 (U, V) を潰して、バッチごとの周波数特性を出す
+    h_mag_org = torch.linalg.norm(h_uvk, dim=(1, 2))
+    h_mag_denoised = torch.linalg.norm(h_w_denoised, dim=(1, 2))
+    
+    return h_uvk_final
+
+
 
 ###############################################################
-channel_type = "InH"
+scenario = "InH"
 NF_setting = "Near"
 Method = "Mirror"
 
-MC = 1             # モンテカルロ回数
-
-Synario = "NYUSIM"  # "Direct" or "NYUSIM"
-# channel_indices = range(1, 2, 1)  # NYUSIMチャネルの場合のインデックスリスト(範囲取って平均)
 channel_indices = [0]  # NYUSIMチャネルの場合のインデックスリスト(個別指定)
 use_H = "T" # 'T' : 真のチャネル行列 , 'E_w' : 推定&同相加算　''E_wo' : 推定&非同相加算
 
@@ -864,15 +538,9 @@ Pu_dBm = 30  # UEの送信電力(dBm)※全サブキャリア
 save_folder = None #: グラフを保存しない, フォルダ名 : 保存するフォルダ名
 # save_folder =  f"Channel_{channel_indices[0]}" 
 # save_folder = "Resized"
-################################################################pr
+################################################################
 
-Base_data = np.load(f"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data/Base_{channel_type}.npy", allow_pickle=True)
-print("N =", Base_data[channel_indices[0]]["N"], "M =", Base_data[channel_indices[0]]["M"])
-phi_disp = [arr % 360 for arr in Base_data[channel_indices[0]]["phi_deg"]]
-print("phi_deg_disp =", phi_disp)
-print("rho =", Base_data[channel_indices[0]]["rho"])
-print("tau =", Base_data[channel_indices[0]]["tau"])
-print("beta =", Base_data[channel_indices[0]]["beta"])
+Base_data = np.load(f"Base_{scenario}_rect.npy", allow_pickle=True)
 
 base_seed = 9  # 今までの固定seed
 
@@ -881,33 +549,6 @@ Pt_mW = 1000/2000  #通信時のサブキャリアごとの基地局送信電力
 P_noise_mW = 6.31e-12 #500kHzあたりの雑音電力
 
 # シミュレーションパラメータ
-d_values = list(range(5, 51, 5))
-Ssub_list = [0, 50, 100]
-
-
-# picked_idx, C_med, idx_list, C_list = pick_typical_channel_by_capacity_totalpaths(
-#     Base_data,
-#     channel_type=channel_type, Q=Q, lam=lam,
-#     d_pick=5, Ssub_lam=0,
-#     Pu_dBm=Pu_dBm,
-#     Pt_mW=Pt_mW, P_noise_mW=P_noise_mW,
-#     use_H="T",
-#     total_paths_target=2,
-#     base_seed=base_seed
-# )
-# channel_indices = [picked_idx]
-# print("Picked channel index for sweep:", channel_indices)
-
-results = sweep_capacity_vs_d_mc(
-    channel_indices=channel_indices,
-    channel_type=channel_type, Q=Q, lam=lam,
-    d_values=d_values, Ssub_list=Ssub_list,
-    base_seed=base_seed, MC=MC,
-    Base_data=Base_data,
-    Pu_dBm=Pu_dBm,
-    Pt_mW=Pt_mW, P_noise_mW=P_noise_mW,
-    use_H=use_H,
-    return_std=False,
-    save_folder=save_folder
-)
+d_values = list(range(5, 6, 5))
+Ssub_list = [0]
 
