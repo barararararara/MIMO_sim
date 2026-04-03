@@ -1,4 +1,4 @@
-# 260319_RCS石垣島_ゼロマスキング検討
+# 260331_rcs_ishigaki_gpu_main.py
 import numpy as np
 import Channel_function_gpu as ch_func
 import Channel_functions as channel
