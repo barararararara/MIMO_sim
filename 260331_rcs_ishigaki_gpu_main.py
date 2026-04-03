@@ -25,17 +25,13 @@ def get_batch_data(base_all, start_idx, b_size, device):
     end_idx = start_idx + b_size
     batch = {}
     
-    # スカラー値や1次元配列の転送 (B,)
+    # 辞書のキー名に合わせて修正
     batch['chi'] = torch.tensor(base_all['chi'][start_idx:end_idx], device=device, dtype=torch.float32)
-    batch['N']   = torch.tensor(base_all['N'][start_idx:end_idx], device=device, dtype=torch.long)
+    batch['N']   = torch.tensor(base_all['N_actual'][start_idx:end_idx], device=device, dtype=torch.long) # N -> N_actual
     batch['Z']   = torch.tensor(base_all['Z'][start_idx:end_idx], device=device, dtype=torch.float32)
     
-    # 2次元・3次元配列の転送 (B, N) や (B, N, M)
-    # パディング済みなので、そのまま Tensor 化してバッチ次元を保持できます
-    batch['rho']   = torch.tensor(base_all['rho'][start_idx:end_idx], device=device, dtype=torch.float32)
-    batch['tau']   = torch.tensor(base_all['tau'][start_idx:end_idx], device=device, dtype=torch.float32)
-    batch['beta']  = torch.tensor(base_all['beta'][start_idx:end_idx], device=device, dtype=torch.float32)
-    batch['U_nm']  = torch.tensor(base_all['U'][start_idx:end_idx], device=device, dtype=torch.float32)
+    # パディング用マスクを取得 (B, N, M)
+    batch['mask'] = torch.tensor(base_all['mask'][start_idx:end_idx], device=device, dtype=torch.float32)
 
     # 角度データ (B, N, M)
     batch['theta_nd_deg'] = torch.tensor(base_all['theta_ND_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
@@ -43,7 +39,10 @@ def get_batch_data(base_all, start_idx, b_size, device):
     batch['phi_deg']      = torch.tensor(base_all['phi_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
     batch['varphi_deg']   = torch.tensor(base_all['varphi_deg'][start_idx:end_idx], device=device, dtype=torch.float32)
     
-    # 距離依存の計算に必要な「基準角度(0,0)」を取得
+    batch['beta_rad']     = torch.tensor(base_all['beta'][start_idx:end_idx], device=device, dtype=torch.float32) # beta -> beta_rad
+    batch['tau']          = torch.tensor(base_all['tau'][start_idx:end_idx], device=device, dtype=torch.float32)
+
+    # 基準角度
     batch['theta_nd_00'] = batch['theta_nd_deg'][:, 0, 0]
     batch['eta_nd_00']   = batch['eta_nd_deg'][:, 0, 0]
     
@@ -294,6 +293,7 @@ def simulation_core_gpu(base_batch, d, Q, lam, Pu_dBm, Ssub_lam, scenario):
     base_data_batch: (B, N, M_max) のテンソル（パディング済み）
     d: 通信距離 (m)
     """
+    path_mask = base_batch['mask'].unsqueeze(1) # (B, 1, N, M) に拡張
     lam_cen = 0.3 / 142.0 # 中心周波数の波長 (m)
     
     eta_dir = np.degrees(np.arcsin(1 / d))
@@ -356,7 +356,7 @@ def simulation_core_gpu(base_batch, d, Q, lam, Pu_dBm, Ssub_lam, scenario):
     # パイロット信号成分 (B, V, N, M)
     # Amp(B,N,M) * exp(j*beta) * b_gain(B,V,N,M) * a_gain(B,V,N,M)
     # ※次元を合わせて一気に掛け算
-    pilot_signal = Amp_per_carrier.unsqueeze(1) * torch.exp(1j * beta_initial).unsqueeze(1) * b_varphi_eta_v * a_phi_theta_v
+    pilot_signal = Amp_per_carrier.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v * a_phi_theta_v * path_mask
 
     # 位相回転項の生成 (B, N, M, V, Q, Q, K)
     # r_mnv0qyqz (B, N, M, V, Q, Q) / 0.3ns
@@ -391,7 +391,7 @@ def simulation_core_gpu(base_batch, d, Q, lam, Pu_dBm, Ssub_lam, scenario):
     Amp_desital = torch.sqrt(Pi_mW) / torch.sqrt(Pu_mW).view(-1, 1, 1)
 
     # beta: (B, N, M) ※初期位相
-    a_MUE_vnm = Amp_desital.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v
+    a_MUE_vnm = Amp_desital.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v * path_mask
 
     lam = 0.3 / f_GHz
 
@@ -403,6 +403,7 @@ def simulation_core_gpu(base_batch, d, Q, lam, Pu_dBm, Ssub_lam, scenario):
 
     # UE側のアンテナ素子位置による位相項 (B, V, N, M, U)
     c = torch.cos(eta_rad_v) * torch.sin(varphi_rad_v) # (B, V, N, M)
+    u = torch.arange(U, device=device).float()
     ue_phase = torch.exp(-1j * torch.pi * u.view(1, 1, 1, 1, -1) * c.unsqueeze(-1))
 
     # 全パスを合成してチャネル行列を算出 (B, U, V, K, Q, Q)
