@@ -57,7 +57,7 @@ def calc_Pr_each_career(lam, d, chi, Pu=-23, setting='InH', do=1):
     return(Pr_each_career)
 
 # Lを求める
-# AOD→azumith angle of departure, AOA→azumith angle of arrival
+# AOD→azimuth angle of departure, AOA→azimuth angle of arrival
 def calc_L(L_AOD_max=2, L_AOA_max=2, setting='InH'):
     if setting == 'InH':
         L_AOD_max = 2
