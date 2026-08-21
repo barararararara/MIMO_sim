@@ -434,6 +434,9 @@ def setting_NYUSIM_synario(Base_data_num, d):
     theta_deg = [theta_ND_deg[n] + Delta_EOD for n in range(N)]
     eta_deg = [eta_ND_deg[n] + Delta_EOA for n in range(N)]
     
+    print("phi_deg =", Base_data_num['phi_deg'])
+    print("theta_deg =", theta_deg)
+    
     NYUSIM_Synario_Data = {
         'chi': chi,
         'N': N,

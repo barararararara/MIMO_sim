@@ -44,6 +44,7 @@ def calc_Pr(lam, d, chi, Pt_dBm=10, setting='InH', do=1):
     Pr_dBm = Pt_dBm - PL
 
     return(Pr_dBm)
+
 def calc_Pr_each_career(lam, d, chi, Pu=-23, setting='InH', do=1):
     # 環境に依る各パラメータを設定
     if setting == 'InH':
@@ -203,7 +204,8 @@ def SP_power(N,M,P,rho,U, setting='InH'):
     Pi = np.zeros((N,max(M)))
     for n in range(N):
         for m in range(M[n]):
-            Pi_dash[n][m] = np.exp(-rho[n][m]/gamma)*(10**(U[n][m]/10))
+            Pi_dash[n][m] = np.exp(-rho[n][m] / gamma) * (10 ** (U[n][m] / 10))
+        for m in range(M[n]):
             Pi[n][m] = (Pi_dash[n][m] / np.sum(Pi_dash[n])) * P[n]
             
     # Pi の最大値とそのインデックスを取得
@@ -227,7 +229,8 @@ def SP_Power_each_career(N,M,P_each_career,rho,U,setting='InH'):
 
     for n in range(N):
         for m in range(M[n]):
-            Pi_dash[n][m] = np.exp(-rho[n][m]/gamma)*(10**(U[n][m]/10))
+            Pi_dash[n][m] = np.exp(-rho[n][m] / gamma) * (10 ** (U[n][m] / 10))
+        for m in range(M[n]):
             Pi_each_career[n][m] = (Pi_dash[n][m] / np.sum(Pi_dash[n])) * P_each_career[n]
             
     # Pi の最大値とそのインデックスを取得
@@ -238,6 +241,55 @@ def SP_Power_each_career(N,M,P_each_career,rho,U,setting='InH'):
         Pi_each_career[0][0], Pi_each_career[max_n][max_m] = Pi_each_career[max_n][max_m], Pi_each_career[0][0]
 
     return(Pi_each_career)
+
+"""
+
+# 実装ミスを含む(VTCFall時代のミスを含む)
+def SP_power(N,M,P,rho,U, setting='InH'):
+    if setting == 'InH':
+        gamma = 2.0
+    elif setting == 'InF':
+        gamma = 4.7
+    Pi_dash = [np.zeros(M[i]) for i in range(N)]
+    Pi = np.zeros((N,max(M)))
+    for n in range(N):
+        for m in range(M[n]):
+            Pi_dash[n][m] = np.exp(-rho[n][m] / gamma) * (10 ** (U[n][m] / 10))
+            Pi[n][m] = (Pi_dash[n][m] / np.sum(Pi_dash[n])) * P[n]
+            
+    # Pi の最大値とそのインデックスを取得
+    max_n, max_m = np.unravel_index(np.argmax(Pi, axis=None), Pi.shape)
+
+    # Pi[0][0] が最大じゃない場合、入れ替える
+    if (max_n, max_m) != (0, 0):
+        Pi[0][0], Pi[max_n][max_m] = Pi[max_n][max_m], Pi[0][0]
+
+    return(Pi)
+
+def SP_Power_each_career(N,M,P_each_career,rho,U,setting='InH'):
+    if setting == 'InH':
+        gamma = 2.0
+        sigma_U = 5.0
+    elif setting == 'InF':
+        gamma = 4.7
+        sigma_U = 13
+    Pi_dash = [np.zeros(M[i]) for i in range(N)]
+    Pi_each_career = np.zeros((N,max(M)))
+
+    for n in range(N):
+        for m in range(M[n]):
+            Pi_dash[n][m] = np.exp(-rho[n][m] / gamma) * (10 ** (U[n][m] / 10))
+            Pi_each_career[n][m] = (Pi_dash[n][m] / np.sum(Pi_dash[n])) * P_each_career[n]
+            
+    # Pi の最大値とそのインデックスを取得
+    max_n, max_m = np.unravel_index(np.argmax(Pi_each_career, axis=None), Pi_each_career.shape)
+
+    # Pi[0][0] が最大じゃない場合、入れ替える
+    if (max_n, max_m) != (0, 0):
+        Pi_each_career[0][0], Pi_each_career[max_n][max_m] = Pi_each_career[max_n][max_m], Pi_each_career[0][0]
+
+    return(Pi_each_career)
+"""
 
 # step9 各サブパスの位相を与える
 def SP_phases(M,N):
