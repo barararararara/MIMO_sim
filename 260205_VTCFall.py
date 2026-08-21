@@ -633,7 +633,7 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     valid = np.setdiff1d(np.arange(V), invalid_indices)  # 残すvのインデックス
     w_DD_pape_red = w_DD_pape[valid]      # (V′,Q,Q)
     a_red = a_uvkqyqz[:,valid,:,:]
-    n_dash_uv_full = channel.noise_dash(U, V)
+    n_dash_uv_full = channel.noise_dash_K_10(U, V)
     n_dash_uv_vdash = n_dash_uv_full[:, valid, :]
 
     # 近傍界チャネル計算
@@ -788,7 +788,7 @@ def plot_capacity(results, Ssub_list, return_std=False, MC=1, use_H="T", save_fo
 
     ax.set_title("")
 
-    if save_folder is not None:
+    if save_folder:
         channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
         
         ax.set_title(title_str, size=15)
@@ -848,7 +848,7 @@ def plot_layers(results, Ssub_list, use_H="T", save_folder=None):
 
     ax.set_title("")
 
-    if save_folder is not None:
+    if save_folder:
         channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
         
         ax.set_title(title_str, size=15)
@@ -897,7 +897,7 @@ def plot_eigs(results, Ssub_list, k_list=(1,2), use_H="T", save_folder=None):
 
     ax.set_title("")
 
-    if save_folder is not None:
+    if save_folder:
         channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall"), folder=save_folder, variants=("Paper",))
         ax.set_title(title_str, size=15)
         channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall"), folder=save_folder, variants=("Slide",))
