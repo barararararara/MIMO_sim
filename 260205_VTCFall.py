@@ -20,6 +20,10 @@ f_GHz_val = f_GHz[1000] #中央周波数
 lam = 0.3 / f_GHz #2000個の波長
 c_ns = 0.3 # 光速 m/ns
 
+# グラフ保存先(ここを変えれば全ての save_current_fig の保存先が変わる)
+FIG_ROOT_PAPER = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用")  # 容量・レイヤ数グラフ(plot_capacity, plot_layers)
+FIG_ROOT_EIGS  = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall")          # 固有値グラフ(plot_eigs)
+
 # シミュレーションシナリオ 251120 正面から到来するシナリオ
 #################################################################################################################
 # サブアレーの位置があっているか確認するプロット用関数
@@ -434,6 +438,9 @@ def setting_NYUSIM_synario(Base_data_num, d):
     theta_deg = [theta_ND_deg[n] + Delta_EOD for n in range(N)]
     eta_deg = [eta_ND_deg[n] + Delta_EOA for n in range(N)]
     
+    print("phi_deg =", Base_data_num['phi_deg'])
+    print("theta_deg =", theta_deg)
+    
     NYUSIM_Synario_Data = {
         'chi': chi,
         'N': N,
@@ -789,10 +796,10 @@ def plot_capacity(results, Ssub_list, return_std=False, MC=1, use_H="T", save_fo
     ax.set_title("")
 
     if save_folder:
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
+        channel.save_current_fig(title_str, root=FIG_ROOT_PAPER, folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
         
         ax.set_title(title_str, size=15)
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Slide",)) #←　カンマ必須！！！
+        channel.save_current_fig(title_str, root=FIG_ROOT_PAPER, folder=save_folder, variants=("Slide",)) #←　カンマ必須！！！
 
     plt.show()
     plt.close(fig)
@@ -849,10 +856,10 @@ def plot_layers(results, Ssub_list, use_H="T", save_folder=None):
     ax.set_title("")
 
     if save_folder:
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
+        channel.save_current_fig(title_str, root=FIG_ROOT_PAPER, folder=save_folder, variants=("Paper",)) #←　カンマ必須！！！
         
         ax.set_title(title_str, size=15)
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用"), folder=save_folder, variants=("Slide",)) #←　カンマ必須！！！
+        channel.save_current_fig(title_str, root=FIG_ROOT_PAPER, folder=save_folder, variants=("Slide",)) #←　カンマ必須！！！
 
     plt.show()
     plt.close(fig)
@@ -898,9 +905,9 @@ def plot_eigs(results, Ssub_list, k_list=(1,2), use_H="T", save_folder=None):
     ax.set_title("")
 
     if save_folder:
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall"), folder=save_folder, variants=("Paper",))
+        channel.save_current_fig(title_str, root=FIG_ROOT_EIGS, folder=save_folder, variants=("Paper",))
         ax.set_title(title_str, size=15)
-        channel.save_current_fig(title_str, root=Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall"), folder=save_folder, variants=("Slide",))
+        channel.save_current_fig(title_str, root=FIG_ROOT_EIGS, folder=save_folder, variants=("Slide",))
 
     plt.show()
     plt.close(fig)
@@ -963,11 +970,11 @@ MC = 1             # モンテカルロ回数
 
 Synario = "NYUSIM"  # "Direct" or "NYUSIM"
 # channel_indices = range(1, 2, 1)  # NYUSIMチャネルの場合のインデックスリスト(範囲取って平均)
-channel_indices = [11]  # NYUSIMチャネルの場合のインデックスリスト(個別指定)
+channel_indices = [928]  # NYUSIMチャネルの場合のインデックスリスト(個別指定)
 use_H = "T" # 'T' : 真のチャネル行列 , 'E_w' : 推定&同相加算　''E_wo' : 推定&非同相加算
 
 # パイロット信号送信電力パラメータ
-Pu_dBm = 30  # UEの送信電力(dBm)※全サブキャリア
+Pu_dBm = 10  # UEの送信電力(dBm)※全サブキャリア
 
 save_folder = False #: グラフを保存しない, フォルダ名 : 保存するフォルダ名
 # save_folder =  f"Channel_{channel_indices[0]}" 
