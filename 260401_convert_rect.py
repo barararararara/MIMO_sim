@@ -2,10 +2,15 @@
 # Baseデータを長方形型に整えるためのコード
 
 import numpy as np
+from pathlib import Path
+import Channel_functions as channel
+
+# 元データ・rectデータの置き場所 (260331_rcs_ishigaki_gpu_main.py と同じ絶対パスを使うこと)
+DATA_DIR = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data")
 
 hf ="InH" # "InH" もしくは "InF" を指定
-source_file = f"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data/Base_{hf}.npy"
-output_file = f"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data/Base_{hf}_rect.npy"
+source_file = DATA_DIR / f"Base_{hf}.npy"
+output_file = DATA_DIR / f"Base_{hf}_rect.npy"
 
 def reshape_to_rect(source_file, output_file):
     # 1. データのロード (1000個の辞書が入ったリスト)
@@ -130,6 +135,14 @@ def full_verification(original_path, rect_path):
         print(f"以下のインデックスで不一致が検出されました: {mismatches}")
 
 # 実行
-original_path = f"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data/Base_{hf}.npy"
-rect_path = f"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data/Base_{hf}_rect.npy"
-full_verification(original_path, rect_path)
+original_path = source_file
+rect_path = output_file
+
+if not channel.is_rect_data_fresh(original_path, rect_path):
+    print(
+        f"[WARNING] '{rect_path.name}' が存在しないか '{original_path.name}' より古いです。\n"
+        f"          上の reshape_to_rect(source_file, output_file) のコメントアウトを外して実行し、"
+        f"rectデータを再生成してください。"
+    )
+else:
+    full_verification(original_path, rect_path)

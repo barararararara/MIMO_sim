@@ -5,6 +5,7 @@ import Channel_functions as channel
 import pandas as pd
 import warnings
 import matplotlib.pyplot as plt
+import re
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (import for 3D)
 from pathlib import Path
@@ -21,8 +22,8 @@ lam = 0.3 / f_GHz #2000個の波長
 c_ns = 0.3 # 光速 m/ns
 
 # グラフ保存先(ここを変えれば全ての save_current_fig の保存先が変わる)
-FIG_ROOT_PAPER = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall原稿使用")  # 容量・レイヤ数グラフ(plot_capacity, plot_layers)
-FIG_ROOT_EIGS  = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures/26_VTCFall")          # 固有値グラフ(plot_eigs)
+FIG_ROOT_PAPER = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures")  # 容量・レイヤ数グラフ(plot_capacity, plot_layers)
+FIG_ROOT_EIGS  = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Figures")          # 固有値グラフ(plot_eigs)
 
 # シミュレーションシナリオ 251120 正面から到来するシナリオ
 #################################################################################################################
@@ -529,6 +530,7 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     t_nm = channel.abs_timedelays(d, rho, tau, N, M) #絶対遅延
     P_mW = channel.cluster_power(Pr_dBm, N, tau, Z, channel_type)
     Pi_mW = channel.SP_power(N, M, P_mW, rho, U_nm, channel_type)
+    print(f"[DEBUG] d={d}, Ssub={Ssub_lam}, Pi_mW(Πn,m)=\n{Pi_mW}")
     P_each_career_mW = channel.cluster_Power_each_career(Pr_dBm_each_career, Z, N, tau, channel_type)
     Pi_each_career_mW = channel.SP_Power_each_career(N, M, P_each_career_mW, rho, U_nm, channel_type)
     
@@ -751,17 +753,44 @@ def sweep_capacity_vs_d_mc(
     return results
 
 
+def _style_legend(ax, title, legend_size, handlelength=2.5, loc="upper right", bbox_to_anchor=(1.0, 1.02)):
+    """凡例のフォントをTimes New Romanに統一し、"0λ"/"0$\\lambda$"を"0"に簡略化する(スライド使用図の後処理スクリプトと同じ規則)。"""
+    legend = ax.legend(title=title)
+    handles = legend.legend_handles
+    labels = [text.get_text() for text in legend.get_texts()]
+    legend_title = legend.get_title().get_text()
+
+    new_labels = []
+    for label in labels:
+        new_label = re.sub(r'(?<!\d)0\$\\lambda\$', '0', label)
+        new_label = re.sub(r'(?<!\d)0λ', '0', new_label)
+        new_labels.append(new_label)
+
+    legend.remove()
+    new_legend = ax.legend(
+        handles,
+        new_labels,
+        handlelength=handlelength,
+        loc=loc,
+        bbox_to_anchor=bbox_to_anchor,
+        title=legend_title,
+        prop={'family': 'Times New Roman', 'size': legend_size},
+    )
+    plt.setp(new_legend.get_title(), family='Times New Roman', size=legend_size)
+    return new_legend
+
 def plot_capacity(results, Ssub_list, return_std=False, MC=1, use_H="T", save_folder=None):
+    LABEL_SIZE = 14   # 軸ラベルのフォントサイズ
+    TICK_SIZE = 12    # 軸目盛りのフォントサイズ
+    LEGEND_SIZE = 9   # 凡例のフォントサイズ
+    MARKER_SIZE = 6   # マーカーのサイズ
+    LINE_WIDTH = 2    # 線の太さ
+
     plt.rcParams.update({
         "font.family": "Times New Roman",
         "mathtext.fontset": "stix",    # ← これが「本物の斜体」の鍵です！
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
     })
-    fig, ax = plt.subplots(figsize=(3.5, 2.6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(4, 3), constrained_layout=True)
 
     if use_H == "T":
         title_str = "Channel Capacity vs BS-UE Distance (True Channel)"
@@ -781,17 +810,26 @@ def plot_capacity(results, Ssub_list, return_std=False, MC=1, use_H="T", save_fo
 
         color = color_map.get(Ssub_lam, default_color)
 
-        ax.plot(d, Cm, marker="o", markersize=4.5, lw=1.6, color=color, label=fr"{Ssub_lam}$\lambda$ Multi")
-        ax.plot(d, C1, marker="s", markersize=4.5, ls="--", lw=1.6, color=color, markerfacecolor="none", label=fr"{Ssub_lam}$\lambda$ Single")
+        ax.plot(d, Cm, marker="o", markersize=MARKER_SIZE, lw=LINE_WIDTH, color=color, label=fr"{Ssub_lam}$\lambda$ Multi")
+        ax.plot(d, C1, marker="s", markersize=MARKER_SIZE, ls="--", lw=LINE_WIDTH, color=color, markerfacecolor="none", label=fr"{Ssub_lam}$\lambda$ Single")
 
         if return_std and MC >= 2:
             ax.fill_between(d, Cm-Cs, Cm+Cs, color=color, alpha=0.15)
 
-    ax.set_xlabel("BS-UE Distance (m)")
-    ax.set_ylabel("Channel Capacity (bps/Hz)")
-    ax.set_ylim(0, 60)
-    ax.grid(True)
-    ax.legend(title=r"$S_\mathrm{sub}$ Layer")
+    ax.set_xticks(list(range(0, 55, 5)))
+    ax.set_xlim(2, 53)
+
+    FONT_SETTINGS = {'fontname': 'Times New Roman', 'fontsize': LABEL_SIZE}
+    ax.set_xlabel("BS-UE Distance (m)", **FONT_SETTINGS)
+    ax.set_ylabel("Channel Capacity (bps/Hz)", **FONT_SETTINGS)
+    ax.set_ylim(0, 70)
+
+    ax.tick_params(axis='both', which='major', labelsize=TICK_SIZE)
+    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+        label.set_fontname('Times New Roman')
+
+    ax.grid(True, which='major', linestyle='-', color="#777777", alpha=0.7, linewidth=0.5)
+    _style_legend(ax, title=r"$S_\mathrm{sub}$ Layer", legend_size=LEGEND_SIZE)
 
     ax.set_title("")
 
@@ -805,16 +843,17 @@ def plot_capacity(results, Ssub_list, return_std=False, MC=1, use_H="T", save_fo
     plt.close(fig)
     
 def plot_layers(results, Ssub_list, use_H="T", save_folder=None):
+    LABEL_SIZE = 14   # 軸ラベルのフォントサイズ
+    TICK_SIZE = 12    # 軸目盛りのフォントサイズ
+    LEGEND_SIZE = 12  # 凡例のフォントサイズ
+    MARKER_SIZE = 7   # マーカーのサイズ
+    LINE_WIDTH = 1.8  # 線の太さ
+
     plt.rcParams.update({
         "font.family": "Times New Roman",
         "mathtext.fontset": "stix",    # ← これが「本物の斜体」の鍵です！
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
     })
-    fig, ax = plt.subplots(figsize=(3.5, 2.6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(4, 3), constrained_layout=True)
 
     if use_H == "T":
         title_str = "Number of Layers vs BS-UE Distance (True Channel)"
@@ -825,33 +864,47 @@ def plot_layers(results, Ssub_list, use_H="T", save_folder=None):
 
     color_map = {0:"tab:green", 50:"tab:blue"}
     default_color = "tab:red"
-    offset = {0:-0.4, 50:0.0, 100:+0.4}
+    marker_map = {0:"o", 50:"s", 100:"^"}
+    default_marker = "D"
+    # 重なった時の見た目のため、奥(50λ)→中(0λ)→手前(100λ)の順で重ね順(zorder)を0から割り当てる
+    # (大きさを変えると値の違いに見えてしまうため、サイズは全Ssub共通)
+    marker_zorder_map = {50:0, 0:1, 100:2}
+    default_marker_zorder = 3
     for Ssub_lam in Ssub_list:
-        d0 = np.array(results[Ssub_lam]["d"], float)
-        d  = d0 + offset.get(Ssub_lam, 0.0)
+        d = np.array(results[Ssub_lam]["d"], float)
         Ly = np.array(results[Ssub_lam]["Ly"], float)
 
         color = color_map.get(Ssub_lam, default_color)
+        marker = marker_map.get(Ssub_lam, default_marker)
+        marker_zorder = marker_zorder_map.get(Ssub_lam, default_marker_zorder)
 
-        ax.plot(d, Ly, lw=1.6, color=color, zorder=1)
+        ax.plot(d, Ly, lw=LINE_WIDTH, color=color, zorder=-1)
         ax.scatter(
             d, Ly,
-            marker="o",
-            s=35,
+            marker=marker,
+            s=MARKER_SIZE ** 2,
             facecolors="white",
             edgecolors=color,
-            linewidths=1.2,
-            zorder=2,
+            linewidths=LINE_WIDTH,
+            zorder=marker_zorder,
             label=fr"{Ssub_lam}$\lambda$"
         )
 
+    ax.set_xticks(list(range(0, 55, 5)))
+    ax.set_xlim(2, 53)
 
-        ax.set_xlabel("BS-UE Distance (m)")
-        ax.set_ylabel("Number of Layers")
-        ax.set_ylim(0, 8.5)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.grid(True, linewidth=0.4, alpha=0.3)
-        ax.legend(title=r"$S_\mathrm{sub}$")
+    FONT_SETTINGS = {'fontname': 'Times New Roman', 'fontsize': LABEL_SIZE}
+    ax.set_xlabel("BS-UE Distance (m)", **FONT_SETTINGS)
+    ax.set_ylabel("Number of Layers", **FONT_SETTINGS)
+    ax.set_ylim(0, 8.5)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+    ax.tick_params(axis='both', which='major', labelsize=TICK_SIZE)
+    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+        label.set_fontname('Times New Roman')
+
+    ax.grid(True, which='major', linestyle='-', color="#777777", alpha=0.7, linewidth=0.5)
+    _style_legend(ax, title=r"$S_\mathrm{sub}$", legend_size=LEGEND_SIZE)
 
     ax.set_title("")
 
@@ -974,9 +1027,9 @@ channel_indices = [928]  # NYUSIMチャネルの場合のインデックスリ�
 use_H = "T" # 'T' : 真のチャネル行列 , 'E_w' : 推定&同相加算　''E_wo' : 推定&非同相加算
 
 # パイロット信号送信電力パラメータ
-Pu_dBm = 10  # UEの送信電力(dBm)※全サブキャリア
+Pu_dBm = 30  # UEの送信電力(dBm)※全サブキャリア
 
-save_folder = False #: グラフを保存しない, フォルダ名 : 保存するフォルダ名
+save_folder = "260825_VTCFallスライド用"  #: グラフを保存しない, フォルダ名 : 保存するフォルダ名
 # save_folder =  f"Channel_{channel_indices[0]}" 
 # save_folder = "Resized"
 ################################################################pr
