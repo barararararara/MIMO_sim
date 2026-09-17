@@ -1101,7 +1101,33 @@ def save_to_npy(file_name, data):
     # npyファイルに保存
     np.save(file_name, data)
     print(f"data have been saved to {file_name}")
-    
+
+
+def is_rect_data_fresh(source_file, rect_file) -> bool:
+    """
+    rect化済みデータ(rect_file)が元データ(source_file)より新しいか(=作り直し忘れていないか)を判定する。
+    260401_convert_rect.py の reshape_to_rect() 呼び出し忘れにより、古いrectデータを
+    気づかず使い続けてしまう事故を防ぐためのチェック。
+    """
+    source_file = Path(source_file)
+    rect_file = Path(rect_file)
+    if not rect_file.exists():
+        return False
+    if not source_file.exists():
+        # 元データが見当たらない場合は判定できないので、rectデータをそのまま使わせる
+        return True
+    return rect_file.stat().st_mtime >= source_file.stat().st_mtime
+
+
+def ensure_rect_data_fresh(source_file, rect_file):
+    """rect_file が古い/存在しない場合、分かりやすいエラーで早期に止める。"""
+    if not is_rect_data_fresh(source_file, rect_file):
+        raise RuntimeError(
+            f"'{rect_file}' が '{source_file}' より古いか、存在しません。\n"
+            f"260401_convert_rect.py の reshape_to_rect(source_file, output_file) を実行して"
+            f"rectデータを再生成してください。"
+        )
+
 
 def _sanitize_title(title: str) -> str:
     """ファイル名に使えない/使いづらい文字を安全化。"""

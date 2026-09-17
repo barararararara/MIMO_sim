@@ -30,6 +30,11 @@ class SystemConfig:
         # 計算時に常に最新のdeviceにいることを保証
         return 0.3 / self.f_GHz.to(self.device)
 
+    @property
+    def lam_cen(self):
+        # 中心周波数(142.0GHz)の波長
+        return 0.3 / 142.0
+
 def calc_Pr_batched(lam, d, chi_batch, scenario, Pt_dBm=10, do=1.0):
     if scenario == 'InH':
         n = 1.8
@@ -217,35 +222,41 @@ def calc_Pi_mW_batched(Pr_dBm_batch, batch, scenario='InH'):
         gamma_cluster = 16.2
         gamma_sp = 4.7
 
+    # --- パディング（無効なクラスタ/サブパス）を除外するマスク ---
+    path_mask = batch['mask'] # (B, N, M): 有効なサブパスは1, パディングは0
+    cluster_mask = (path_mask.sum(dim=2) > 0).to(path_mask.dtype) # (B, N): 有効なクラスタは1
+
     # --- 2. クラスタ電力 P_mW の算出 (B, N) ---
     Pr_mW = 10 ** (Pr_dBm_batch / 10.0) # (B,)
-    # P_dash = exp(-tau/gamma) * 10^(Z/10)
-    P_dash = torch.exp(-batch['tau'] / gamma_cluster) * (10 ** (batch['Z'] / 10.0)) # (B, N)
+    # P_dash = exp(-tau/gamma) * 10^(Z/10)  ※パディングクラスタは0にする
+    P_dash = torch.exp(-batch['tau'] / gamma_cluster) * (10 ** (batch['Z'] / 10.0)) * cluster_mask # (B, N)
     P_dash_sum = torch.sum(P_dash, dim=1, keepdim=True) # (B, 1)
     P_mW = (P_dash / (P_dash_sum + 1e-15)) * Pr_mW.view(-1, 1) # (B, N)
 
     # --- 3. サブパス電力 Pi の算出 (B, N, M) ---
-    # Pi_dash = exp(-rho/gamma) * 10^(U/10)
-    Pi_dash = torch.exp(-batch['rho'] / gamma_sp) * (10 ** (batch['U_nm'] / 10.0)) # (B, N, M)
+    # Pi_dash = exp(-rho/gamma) * 10^(U/10)  ※パディングサブパスは0にする
+    Pi_dash = torch.exp(-batch['rho'] / gamma_sp) * (10 ** (batch['U_nm'] / 10.0)) * path_mask # (B, N, M)
     Pi_dash_sum = torch.sum(Pi_dash, dim=2, keepdim=True) # (B, N, 1)
     # 各クラスタ電力をサブパスへ分配 (B, N, M)
     Pi = (Pi_dash / (Pi_dash_sum + 1e-15)) * P_mW.unsqueeze(-1) # (B, N, M)
 
-    # --- 4. Pi[0,0] と最大値の入れ替え処理 (バッチごとに実行) ---
+    # --- 4. Pi[0,0] と最大値の入れ替え処理 (バッチ全体を一括処理) ---
     # バッチごとの (N, M) 平面における最大値のインデックスを取得
     # Pi.view(B, -1) で (B, N*M) に平坦化して最大値を探す
     Pi_flat = Pi.view(Pi.size(0), -1) # (B, N*M)
     max_indices = torch.argmax(Pi_flat, dim=1) # 各バッチの最大値インデックス (B,)
 
-    for b in range(Pi.size(0)):
-        if max_indices[b] != 0:
-            # 2次元インデックス (n, m) に戻す
-            max_n = max_indices[b] // Pi.size(2)
-            max_m = max_indices[b] % Pi.size(2)
-            # Pi[0,0] と最大値を入れ替え
-            target_val = Pi[b, 0, 0].clone()
-            Pi[b, 0, 0] = Pi[b, max_n, max_m]
-            Pi[b, max_n, max_m] = target_val
+    # 2次元インデックス (n, m) に戻す (B,)
+    max_n = max_indices // Pi.size(2)
+    max_m = max_indices % Pi.size(2)
+
+    # Pythonループを使わずバッチ全体で Pi[0,0] <-> Pi[max_n, max_m] を入れ替える
+    # (max_indices == 0 のバッチは自分自身との入れ替えになり結果は変わらない)
+    batch_idx = torch.arange(Pi.size(0), device=Pi.device)
+    val_00 = Pi[:, 0, 0].clone()
+    val_max = Pi[batch_idx, max_n, max_m].clone()
+    Pi[:, 0, 0] = val_max
+    Pi[batch_idx, max_n, max_m] = val_00
 
     return Pi
 
@@ -481,20 +492,27 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     return cap_per_trial, ly_per_trial
 
 # シミュレーションの大筋のcore部分
-def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B, config: SystemConfig):
+def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B, config: SystemConfig,
+                                            subarray_v_qy_qz=None, DFT_weights=None):
     """
     config (SystemConfig): システムパラメータの塊
     d (float): 通信距離
     Ssub_lam (float): サブアレー間隔 (ラムダ単位)
+    subarray_v_qy_qz: 事前計算済みのサブアレー座標 (V,Q,Q,3)。Ssub_lam ごとに固定なので、
+                       同じ Ssub_lam でバッチを回す場合は呼び出し側で1回だけ計算して使い回すと効率的。
+                       未指定なら関数内で毎回計算する(後方互換)。
+    DFT_weights: 事前計算済みのDFTウェイト (Q,Q,Q,Q)。d/Ssub_lam/batchに依存しないため、
+                 呼び出し側でループの外で1回だけ計算して使い回すと効率的。
+                 未指定なら関数内で毎回計算する(後方互換)。
     """
     # configからパラメータを抽出
     device = config.device
     Q, V, U, K = config.Q, config.V, config.U, config.K
     f_GHz = config.f_GHz.to(device)
     lam = config.lam # propertyにより自動計算
-    
+
     path_mask = base_batch['mask'].unsqueeze(1) # (B, 1, N, M)
-    lam_cen = 0.3 / 142.0 
+    lam_cen = config.lam_cen
 
     # --- 物理座標・角度計算 ---
     eta_dir = np.degrees(np.arcsin(1 / d))
@@ -514,18 +532,21 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     num_carriers = f_GHz.size(0)
     
     # 各種バッチ計算関数の呼び出し (ch_func等は定義済みとする)
-    Pr_dBm = calc_Pr_batched(lam, d, base_batch['chi'], scenario, Pt_dBm=10, do=1.0)
+    lam_cen_t = torch.tensor(lam_cen, device=device, dtype=torch.float32)
+    Pr_dBm = calc_Pr_batched(lam_cen_t, d, base_batch['chi'], scenario, Pt_dBm=10, do=1.0)
     t_nm = abs_timedelays_batched(d, base_batch)
     R, MUE_coordinate = Mirror_UE_positions_batched(d, base_batch, theta_rad, phi_rad)
-    subarray_v_qy_qz = calc_anntena_xyz_Ssub_gpu(lam_cen, V, Q, Ssub_lam, device=device)
+    if subarray_v_qy_qz is None:
+        subarray_v_qy_qz = calc_anntena_xyz_Ssub_gpu(lam_cen, V, Q, Ssub_lam, device=device)
     r_mnv0qyqz = distance_to_eachanntena_batched(MUE_coordinate, subarray_v_qy_qz)
     tau_mnv0qyqz = r_mnv0qyqz / 0.3
     phi_rad_v, theta_rad_v, varphi_rad_v, eta_rad_v = calc_all_angles_batched(base_batch, MUE_coordinate, subarray_v_qy_qz)
 
     Pi_mW = calc_Pi_mW_batched(Pr_dBm, base_batch, scenario=scenario)
     Pi_mW_per_carrier = Pi_mW / num_carriers
-    
-    DFT_weights = DFT_weight_calc_gpu(Q, device=device)
+
+    if DFT_weights is None:
+        DFT_weights = DFT_weight_calc_gpu(Q, device=device)
     b_varphi_eta_v = define_b_phi_eta_batched(eta_rad_v)
     Amp_per_carrier = torch.sqrt(Pi_mW_per_carrier)
     a_phi_theta_v = define_a_batched(V, phi_rad_v, theta_rad_v)
