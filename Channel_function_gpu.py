@@ -604,7 +604,7 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     h_w_2k = torch.cat([h_est_corrected, h_w_rev], dim=-1)
     h_tau_2k = torch.fft.ifft(h_w_2k, dim=-1)
 
-    df = f_GHz[1] - f_GHz[0]
+    df = (f_GHz[1] - f_GHz[0]).item()  # スカラーのfloatに変換(このあとindex計算にしか使わない)
     dt = 1.0 / (2 * K * df) # 2Kポイントなので分母は2K
     L_idx = int(round(100e-9 / dt))
     
