@@ -88,6 +88,11 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
         all_cap = np.zeros((len(d_values), len(Ssub_list), total_trials, 2))
         all_ly  = np.zeros((len(d_values), len(Ssub_list), total_trials, 2))
 
+        # ファイル名に試行数とタイムスタンプを含め、設定を変えて再実行した際に
+        # 過去の結果を気づかず上書きしてしまわないようにする(ループ開始前に1回だけ決める)
+        timestamp = time.strftime("%y%m%d_%H%M%S")
+        filename = f"Results_{scenario}_{total_trials}trials_{timestamp}.npz"
+
         start_time = time.time()
 
         for d_idx, d in enumerate(d_values):
@@ -131,18 +136,17 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
 
                 print("Done.")
 
-        # データの保存 (np.savez で圧縮保存)
-        # ファイル名に試行数とタイムスタンプを含め、設定を変えて再実行した際に
-        # 過去の結果を気づかず上書きしてしまわないようにする
-        timestamp = time.strftime("%y%m%d_%H%M%S")
-        filename = f"Results_{scenario}_{total_trials}trials_{timestamp}.npz"
-        np.savez(filename,
-                capacity=all_cap,
-                layers=all_ly,
-                d=d_values,
-                Ssub=Ssub_list,
-                total_trials=total_trials,
-                B=B)
+                # 1パターン(d, Ssub)終わるごとに毎回保存する。長時間の実行中に何かの
+                # 拍子に中断しても、それまでの進捗を失わないようにするため。
+                np.savez(filename,
+                        capacity=all_cap,
+                        layers=all_ly,
+                        d=d_values,
+                        Ssub=Ssub_list,
+                        total_trials=total_trials,
+                        B=B,
+                        d_idx_done=d_idx,
+                        ssub_idx_done=ssub_idx)
 
         end_time = time.time()
         print(f"=== {scenario} Finished. Total Time: {end_time - start_time:.2f}s ===")
