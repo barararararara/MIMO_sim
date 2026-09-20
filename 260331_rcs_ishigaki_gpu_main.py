@@ -154,10 +154,10 @@ scenario = "InH"
 
 # シミュレーション条件
 scenarios = ['InH']  # 'InF' なども追加可能
-d_values = [10, 20, 30, 40, 50]  # 通信距離 (m)
+d_values = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]  # 通信距離 (m)
 Ssub_list = [0, 50, 100]         # サブアレー間隔 (λ)
-total_trials = 1              # 総試行数
-B = 1                          # バッチサイズ (GPUメモリに合わせて調整)
+total_trials = 1000              # 総試行数
+B = 2                          # バッチサイズ (GPUメモリに合わせて調整)
 
 if __name__ == "__main__":
     run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B)
