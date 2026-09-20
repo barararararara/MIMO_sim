@@ -572,7 +572,7 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     # phase_term は (B,N,M,V,Q,Q,K) という巨大テンソルで、Kをまとめて展開すると
     # (掛け算の中間結果 + exp()の出力)で瞬間的に2倍のメモリを要求しGPUメモリが足りなくなる。
     # サブキャリアをチャンクに分けて計算し、最後にK軸で結合することでピークメモリを抑える。
-    K_CHUNK = 200
+    K_CHUNK = 50
     complex_Amp_antena_chunks = []
     a_uvkqyqz_chunks = []
     for k_start in range(0, num_carriers, K_CHUNK):
