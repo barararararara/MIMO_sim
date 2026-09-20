@@ -571,13 +571,14 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     # --- チャネル行列算出 ---
     Amp_digital = torch.sqrt(Pi_mW) / torch.sqrt(torch.tensor(Pu_mW, device=device))
     a_MUE_vnm = Amp_digital.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v * path_mask
-    exp_term = torch.exp(-2j * torch.pi * f_GHz.view(1, 1, 1, 1, 1, 1, -1) * tau_mnv0qyqz.unsqueeze(-1))
-    
+    # exp_term は phase_term と全く同じ式なので使い回す(同じ巨大テンソルを二重に持たない)
+
     u_idx = torch.arange(U, device=device).float()
     c_val = torch.cos(eta_rad_v) * torch.sin(varphi_rad_v)
     ue_phase = torch.exp(-1j * torch.pi * u_idx.view(1, 1, 1, 1, -1) * c_val.unsqueeze(-1))
 
-    a_uvkqyqz = torch.einsum('bvnm, bvnm, bvnmu, bnmvyzk -> buvkyz', a_MUE_vnm, a_phi_theta_v, ue_phase, exp_term)
+    a_uvkqyqz = torch.einsum('bvnm, bvnm, bvnmu, bnmvyzk -> buvkyz', a_MUE_vnm, a_phi_theta_v, ue_phase, phase_term)
+    del phase_term  # (B,N,M,V,Q,Q,K)の巨大テンソル。もう使わないので明示的に解放してピークメモリを抑える
 
     # ビーム選択ロジック
     threshold_dBm = -73
