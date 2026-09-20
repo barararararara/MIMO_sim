@@ -42,7 +42,7 @@ def calc_Pr_batched(lam, d, chi_batch, scenario, Pt_dBm=10, do=1.0):
         n = 1.7
     
     fspl = 20 * torch.log10(4 * torch.pi * do / lam)
-    PL = fspl + 10*n*torch.log10(d/do) + chi_batch
+    PL = fspl + 10*n*math.log10(d/do) + chi_batch  # d, do はスカラーのfloatなのでmath.log10を使う
     Pr_dbm = Pt_dBm - PL
     
     return Pr_dbm
