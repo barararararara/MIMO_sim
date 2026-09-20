@@ -540,7 +540,13 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
         subarray_v_qy_qz = calc_anntena_xyz_Ssub_gpu(lam_cen, V, Q, Ssub_lam, device=device)
     r_mnv0qyqz = distance_to_eachanntena_batched(MUE_coordinate, subarray_v_qy_qz)
     tau_mnv0qyqz = r_mnv0qyqz / 0.3
-    phi_rad_v, theta_rad_v, varphi_rad_v, eta_rad_v = calc_all_angles_batched(base_batch, MUE_coordinate, subarray_v_qy_qz)
+    # calc_all_angles_batched は batch['theta_deg']/batch['eta_deg'] を参照するが、
+    # base_batch にあるのは補正前の 'theta_nd_deg'/'eta_nd_deg' のみ。
+    # d に応じて補正済みの theta_deg/eta_deg(上で計算済み)を使わせるため上書きして渡す。
+    angle_batch = dict(base_batch)
+    angle_batch['theta_deg'] = theta_deg
+    angle_batch['eta_deg'] = eta_deg
+    phi_rad_v, theta_rad_v, varphi_rad_v, eta_rad_v = calc_all_angles_batched(angle_batch, MUE_coordinate, subarray_v_qy_qz)
 
     Pi_mW = calc_Pi_mW_batched(Pr_dBm, base_batch, scenario=scenario)
     Pi_mW_per_carrier = Pi_mW / num_carriers
