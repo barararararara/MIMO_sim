@@ -1,4 +1,5 @@
 # 260331_rcs_ishigaki_gpu_main.py
+import os
 import numpy as np
 import Channel_function_gpu as ch_func
 import Channel_functions as channel
@@ -8,8 +9,11 @@ import time
 from pathlib import Path
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# 元データ・rectデータの置き場所 (260401_convert_rect.py と同じ絶対パスを使うこと)
-DATA_DIR = Path(r"C:/Users/tai20/OneDrive - 国立大学法人 北海道大学/sim_data/Data")
+# 元データ・rectデータの置き場所 (260401_convert_rect.py と同じ場所を使うこと)。
+# 環境変数 MIMO_SIM_DATA_DIR が設定されていればそこを、無ければこのスクリプトと
+# 同じディレクトリ(リポジトリ直下)を使う。Windows開発機とLinux実行機など、
+# マシンによってデータの置き場所が違っても環境変数だけで切り替えられるようにするため。
+DATA_DIR = Path(os.environ.get("MIMO_SIM_DATA_DIR", Path(__file__).resolve().parent))
 
 #ベースデータからバッチサイズ分データ取得し、GPUへ転送する関数
 def get_batch_data(base_all, start_idx, b_size, device):

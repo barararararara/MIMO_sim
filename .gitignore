@@ -1,0 +1,13 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Simulation data / results (these belong in MIMO_SIM_DATA_DIR, not in git)
+*.npy
+*.npz
+*.log
