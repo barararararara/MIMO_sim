@@ -457,8 +457,9 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # 有効チャネル H_eff = H_true * Te_H
     h_eff = torch.bmm(h_true_flat, Te_H)
     
-    # 電力行列 A の適用
+    # 電力行列 A の適用 (実数のまま作ると後段のtorch.bmmが複素数と型不一致でエラーになるため複素数化)
     A = torch.sqrt(torch.tensor(config.Pt_mW, device=device)) * torch.diag_embed(torch.sqrt(p_allo_gpu))
+    A = A.to(h_eff.dtype)
     
     # 4. 受信側 MMSE 重みの算出 (B*K個を一気に計算)
     gamma0 = config.Pt_mW / config.P_noise_mW
