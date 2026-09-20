@@ -511,8 +511,6 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     Q, V, U, K = config.Q, config.V, config.U, config.K
     f_GHz = config.f_GHz.to(device)
     lam = config.lam # propertyにより自動計算
-    print(f"[DEBUG] simulation_core start: mem_allocated={torch.cuda.memory_allocated(device)/1e9:.3f}GB "
-          f"mem_reserved={torch.cuda.memory_reserved(device)/1e9:.3f}GB")
 
     path_mask = base_batch['mask'].unsqueeze(1) # (B, 1, N, M)
     lam_cen = config.lam_cen
@@ -563,26 +561,35 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     # 複素振幅合成
     beta_rad = base_batch['beta_rad']
     pilot_signal = Amp_per_carrier.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v * a_phi_theta_v * path_mask
-    print(f"[DEBUG] B={B} tau_mnv0qyqz.shape={tuple(tau_mnv0qyqz.shape)} f_GHz.shape={tuple(f_GHz.shape)} "
-          f"mem_allocated={torch.cuda.memory_allocated(device)/1e9:.3f}GB mem_reserved={torch.cuda.memory_reserved(device)/1e9:.3f}GB")
-    phase_term = torch.exp(-2j * torch.pi * f_GHz.view(1, 1, 1, 1, 1, 1, -1) * tau_mnv0qyqz.unsqueeze(-1))
-    complex_Amp_antena = torch.einsum('bvnm, bnmvyzk -> bvkyz', pilot_signal, phase_term)
 
-    # 雑音とビーム割当
-    n_k_v = noise_n_k_v_batched(B, V, num_carriers, device)
-    P_sub_dash_dBm = near_Power_inc_noise_batched(V, Q, DFT_weights, complex_Amp_antena, n_k_v)
-
-    # --- チャネル行列算出 ---
+    # --- チャネル行列算出の準備 (サブキャリアに依存しない部分) ---
     Amp_digital = torch.sqrt(Pi_mW) / torch.sqrt(torch.tensor(Pu_mW, device=device))
     a_MUE_vnm = Amp_digital.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v * path_mask
-    # exp_term は phase_term と全く同じ式なので使い回す(同じ巨大テンソルを二重に持たない)
-
     u_idx = torch.arange(U, device=device).float()
     c_val = torch.cos(eta_rad_v) * torch.sin(varphi_rad_v)
     ue_phase = torch.exp(-1j * torch.pi * u_idx.view(1, 1, 1, 1, -1) * c_val.unsqueeze(-1))
 
-    a_uvkqyqz = torch.einsum('bvnm, bvnm, bvnmu, bnmvyzk -> buvkyz', a_MUE_vnm, a_phi_theta_v, ue_phase, phase_term)
-    del phase_term  # (B,N,M,V,Q,Q,K)の巨大テンソル。もう使わないので明示的に解放してピークメモリを抑える
+    # phase_term は (B,N,M,V,Q,Q,K) という巨大テンソルで、Kをまとめて展開すると
+    # (掛け算の中間結果 + exp()の出力)で瞬間的に2倍のメモリを要求しGPUメモリが足りなくなる。
+    # サブキャリアをチャンクに分けて計算し、最後にK軸で結合することでピークメモリを抑える。
+    K_CHUNK = 200
+    complex_Amp_antena_chunks = []
+    a_uvkqyqz_chunks = []
+    for k_start in range(0, num_carriers, K_CHUNK):
+        k_end = min(k_start + K_CHUNK, num_carriers)
+        f_GHz_chunk = f_GHz[k_start:k_end]
+        phase_term_chunk = torch.exp(-2j * torch.pi * f_GHz_chunk.view(1, 1, 1, 1, 1, 1, -1) * tau_mnv0qyqz.unsqueeze(-1))
+        complex_Amp_antena_chunks.append(torch.einsum('bvnm, bnmvyzk -> bvkyz', pilot_signal, phase_term_chunk))
+        a_uvkqyqz_chunks.append(torch.einsum('bvnm, bvnm, bvnmu, bnmvyzk -> buvkyz', a_MUE_vnm, a_phi_theta_v, ue_phase, phase_term_chunk))
+        del phase_term_chunk
+
+    complex_Amp_antena = torch.cat(complex_Amp_antena_chunks, dim=2)  # (B,V,K,Q,Q)
+    a_uvkqyqz = torch.cat(a_uvkqyqz_chunks, dim=3)  # (B,U,V,K,Q,Q)
+    del complex_Amp_antena_chunks, a_uvkqyqz_chunks
+
+    # 雑音とビーム割当
+    n_k_v = noise_n_k_v_batched(B, V, num_carriers, device)
+    P_sub_dash_dBm = near_Power_inc_noise_batched(V, Q, DFT_weights, complex_Amp_antena, n_k_v)
 
     # ビーム選択ロジック
     threshold_dBm = -73
