@@ -511,6 +511,8 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     Q, V, U, K = config.Q, config.V, config.U, config.K
     f_GHz = config.f_GHz.to(device)
     lam = config.lam # propertyにより自動計算
+    print(f"[DEBUG] simulation_core start: mem_allocated={torch.cuda.memory_allocated(device)/1e9:.3f}GB "
+          f"mem_reserved={torch.cuda.memory_reserved(device)/1e9:.3f}GB")
 
     path_mask = base_batch['mask'].unsqueeze(1) # (B, 1, N, M)
     lam_cen = config.lam_cen
@@ -561,6 +563,8 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     # 複素振幅合成
     beta_rad = base_batch['beta_rad']
     pilot_signal = Amp_per_carrier.unsqueeze(1) * torch.exp(1j * beta_rad).unsqueeze(1) * b_varphi_eta_v * a_phi_theta_v * path_mask
+    print(f"[DEBUG] B={B} tau_mnv0qyqz.shape={tuple(tau_mnv0qyqz.shape)} f_GHz.shape={tuple(f_GHz.shape)} "
+          f"mem_allocated={torch.cuda.memory_allocated(device)/1e9:.3f}GB mem_reserved={torch.cuda.memory_reserved(device)/1e9:.3f}GB")
     phase_term = torch.exp(-2j * torch.pi * f_GHz.view(1, 1, 1, 1, 1, 1, -1) * tau_mnv0qyqz.unsqueeze(-1))
     complex_Amp_antena = torch.einsum('bvnm, bnmvyzk -> bvkyz', pilot_signal, phase_term)
 
