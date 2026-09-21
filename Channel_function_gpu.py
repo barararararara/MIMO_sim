@@ -474,7 +474,10 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     
     s_pow = torch.abs(torch.diagonal(B_mat, dim1=-2, dim2=-1))**2
     total_pow = torch.sum(torch.abs(B_mat)**2, dim=-1)
-    i_pow = total_pow - s_pow
+    # i_pow(干渉電力)は物理的に0以上のはずだが、浮動小数点の引き算誤差で
+    # ごくわずかに負になることがあり、P_noise_mWが極小のため log2() の分母が
+    # 負になってNaNを生む原因になっていた。0未満にならないようclampする。
+    i_pow = torch.clamp(total_pow - s_pow, min=0.0)
     n_pow = config.P_noise_mW * torch.sum(torch.abs(W_MMSE)**2, dim=-2)
     
     # --- 全データ集計処理 ---
