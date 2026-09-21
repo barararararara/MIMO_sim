@@ -416,6 +416,14 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     config: SystemConfig インスタンス
     water_filling_func: CPU側の注水定理関数
     """
+    # このあとのSVD/MMSE/SINR計算はCPU版(numpyのfloat64)と同じ精度で行う。
+    # ここで扱う行列は (B*K, U, V) 程度で小さく(巨大なのはチャネル行列を作る
+    # 前段のテンソルの方)、complex128にしてもメモリ増加はごくわずかで済む一方、
+    # float32では s_pow/i_pow の引き算がキャンセレーション誤差でi_powが
+    # 僅かに負になりNaNを生んでいた(CPU版はfloat64のため起きていなかった)。
+    h_use = h_use.to(torch.complex128)
+    h_true = h_true.to(torch.complex128)
+
     B, U, V, K = h_use.shape
     device = config.device
     
@@ -445,7 +453,7 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
         return np.zeros(B), np.zeros(B)
     
     # 3. 結果をGPUに戻して並列計算
-    p_allo_gpu = torch.zeros((B*K, max_ly), device=device)
+    p_allo_gpu = torch.zeros((B*K, max_ly), device=device, dtype=torch.float64)
     for i, p in enumerate(p_allo_list):
         if ly_list[i] > 0:
             p_allo_gpu[i, :ly_list[i]] = torch.tensor(p, device=device)
