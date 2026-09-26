@@ -463,6 +463,13 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
         bad = np.where(~np.isfinite(S_cpu).all(axis=1))[0]
         print(f"[DEBUG-SVD] S に非有限値あり: 該当行数={len(bad)}/{S_cpu.shape[0]} 例row={bad[0]}: S={S_cpu[bad[0]]}")
         print(f"[DEBUG-SVD] h_use_flat[row]={h_use_flat[bad[0]]}")
+
+    # [DEBUG] eig_valsの実際の分布を確認する(原因調査用、後で削除する)
+    row_max = eig_vals.max(axis=1)
+    zero_rows = int(np.count_nonzero(row_max <= 0))
+    print(f"[DEBUG-EIG] rows={eig_vals.shape[0]} zero_rows(row_max<=0)={zero_rows} "
+          f"row_max: min={row_max.min():.3e} max={row_max.max():.3e} mean={row_max.mean():.3e}")
+    print(f"[DEBUG-EIG] eig_vals[0]={eig_vals[0]}")
     
     p_allo_list = []
     ly_list = []
