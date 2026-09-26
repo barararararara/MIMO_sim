@@ -266,21 +266,41 @@ def calc_eigval(H):
     return eigval, eigvec
 
 # 注水定理を実行する関数
-def water_filling_ratio(eig_vals, Pt, P_noise, iters=200):
+def water_filling_ratio(eig_vals, Pt, P_noise, iters=200, rel_eps=1e-6):
     """
     eig_vals: 固有値 λ_j
     Pt: 総送信電力
     P_noise: 雑音電力
+    rel_eps: 最大固有値に対してこの相対閾値未満の固有値は、実体のない
+             (信号が全く届いていない)レイヤとみなし水注水定理から除外する。
+
+    サブアレーは3面(0°/120°/240°)構成のため、UEの位置やマルチパスの
+    到来角によって実際に信号が届くサブアレー数は4/8/12と変わり得る。
+    絶対値の床(旧: 1e-15)だけで判定すると、本当に信号が無い固有値まで
+    「わずかに正の値」として扱われ、水注水定理が実体のないレイヤにまで
+    均等に電力配分してしまう。その結果、対応するチャネル成分が構造的に
+    完全ゼロの場合、後段の容量計算で 0/0 のNaNを引き起こしていた
+    (GPU版で1000試行スイープした際に発見)。最大固有値に対する相対閾値で
+    「本当に有効な固有値か」を判定することで、UE位置やマルチパス構成に
+    応じて動的に正しいレイヤ数を求める。
     """
     tol = 1e-6
-    g = np.asarray(eig_vals, float)
-    g = np.maximum(g, 1e-15)  # ゼロ割防止
+    g_raw = np.asarray(eig_vals, float)
+    g_max = g_raw.max() if g_raw.size > 0 else 0.0
+
+    if g_max <= 0:
+        return np.zeros_like(g_raw), 0
+
+    valid = g_raw > (rel_eps * g_max)  # 実体のある固有値だけを対象にする
+    g = np.full_like(g_raw, 1e-15)
+    g[valid] = np.maximum(g_raw[valid], 1e-15)  # ゼロ割防止
 
     lo, hi = 1e-15, 1e12
     for _ in range(iters):
         alpha = (lo + hi) / 2.0
         # 最適電力を計算
         P = np.maximum(1/alpha - P_noise / g, 0.0)
+        P[~valid] = 0.0  # 無効な固有値には電力を割り当てない
         S = P.sum()
         if abs(S - Pt) < tol:
             break
