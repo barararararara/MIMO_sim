@@ -457,19 +457,6 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # 2. 特異値をCPUへ転送して注水定理を実行（ハイブリッド処理）
     S_cpu = S.detach().cpu().numpy()
     eig_vals = S_cpu ** 2 # グラム行列の固有値に対応
-
-    # [DEBUG] SVDの特異値自体にNaN/Infが紛れ込んでいないか確認する(原因調査用)
-    if not np.isfinite(S_cpu).all():
-        bad = np.where(~np.isfinite(S_cpu).all(axis=1))[0]
-        print(f"[DEBUG-SVD] S に非有限値あり: 該当行数={len(bad)}/{S_cpu.shape[0]} 例row={bad[0]}: S={S_cpu[bad[0]]}")
-        print(f"[DEBUG-SVD] h_use_flat[row]={h_use_flat[bad[0]]}")
-
-    # [DEBUG] eig_valsの実際の分布を確認する(原因調査用、後で削除する)
-    row_max = eig_vals.max(axis=1)
-    zero_rows = int(np.count_nonzero(row_max <= 0))
-    print(f"[DEBUG-EIG] rows={eig_vals.shape[0]} zero_rows(row_max<=0)={zero_rows} "
-          f"row_max: min={row_max.min():.3e} max={row_max.max():.3e} mean={row_max.mean():.3e}")
-    print(f"[DEBUG-EIG] eig_vals[0]={eig_vals[0]}")
     
     p_allo_list = []
     ly_list = []
@@ -523,21 +510,6 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # --- 全データ集計処理 ---
     # 各サブキャリア・各レイヤの容量算出
     c_ly = torch.log2(s_pow / (i_pow + n_pow) + 1.0)
-
-    # [DEBUG] NaNが最初に出たケースの詳細を1件だけ出力する(原因調査用、後で削除する)
-    nan_mask = torch.isnan(c_ly)
-    if torch.any(nan_mask):
-        idx = torch.nonzero(nan_mask)[0]
-        row, col = idx[0].item(), idx[1].item()
-        print(f"[DEBUG-NAN] row={row} layer_col={col} max_ly={max_ly} ly_list[row]={ly_list[row]}")
-        print(f"[DEBUG-NAN] S(singular values)={S[row]}")
-        print(f"[DEBUG-NAN] s_pow={s_pow[row]}")
-        print(f"[DEBUG-NAN] total_pow={total_pow[row]}")
-        print(f"[DEBUG-NAN] i_pow(before clamp would be total-s)={ (total_pow[row]-s_pow[row]) }")
-        print(f"[DEBUG-NAN] n_pow={n_pow[row]}")
-        print(f"[DEBUG-NAN] p_allo_gpu[row]={p_allo_gpu[row]}")
-        print(f"[DEBUG-NAN] active_mask/W_MMSE col norm={torch.abs(W_MMSE[row]).pow(2).sum(dim=0)}")
-
     c_subcarrier = torch.sum(torch.real(c_ly), dim=1)
     
     # 形状を [B, K] に戻す
