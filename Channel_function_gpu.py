@@ -457,6 +457,12 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # 2. 特異値をCPUへ転送して注水定理を実行（ハイブリッド処理）
     S_cpu = S.detach().cpu().numpy()
     eig_vals = S_cpu ** 2 # グラム行列の固有値に対応
+
+    # [DEBUG] SVDの特異値自体にNaN/Infが紛れ込んでいないか確認する(原因調査用)
+    if not np.isfinite(S_cpu).all():
+        bad = np.where(~np.isfinite(S_cpu).all(axis=1))[0]
+        print(f"[DEBUG-SVD] S に非有限値あり: 該当行数={len(bad)}/{S_cpu.shape[0]} 例row={bad[0]}: S={S_cpu[bad[0]]}")
+        print(f"[DEBUG-SVD] h_use_flat[row]={h_use_flat[bad[0]]}")
     
     p_allo_list = []
     ly_list = []
