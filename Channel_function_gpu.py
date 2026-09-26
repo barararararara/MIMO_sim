@@ -677,7 +677,11 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     h_w_2k = torch.cat([h_est_corrected, h_w_rev], dim=-1)
     h_tau_2k = torch.fft.ifft(h_w_2k, dim=-1)
 
-    df = (f_GHz[1] - f_GHz[0]).item()  # スカラーのfloatに変換(このあとindex計算にしか使わない)
+    # f_GHz はGHz単位の値なので、Hz単位に変換してからdtを計算する必要がある。
+    # 変換を忘れると dt が1e9倍大きくなり、100e-9/dt が実質0になって
+    # L_idx=0 → 下のマスクが配列全体([0:2K])を丸ごとゼロにしてしまい、
+    # h_est(推定チャネル)が常に完全にゼロになってしまっていた。
+    df = (f_GHz[1] - f_GHz[0]).item() * 1e9  # GHz → Hz
     dt = 1.0 / (2 * K * df) # 2Kポイントなので分母は2K
     L_idx = int(round(100e-9 / dt))
     
