@@ -491,6 +491,21 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # --- 全データ集計処理 ---
     # 各サブキャリア・各レイヤの容量算出
     c_ly = torch.log2(s_pow / (i_pow + n_pow) + 1.0)
+
+    # [DEBUG] NaNが最初に出たケースの詳細を1件だけ出力する(原因調査用、後で削除する)
+    nan_mask = torch.isnan(c_ly)
+    if torch.any(nan_mask):
+        idx = torch.nonzero(nan_mask)[0]
+        row, col = idx[0].item(), idx[1].item()
+        print(f"[DEBUG-NAN] row={row} layer_col={col} max_ly={max_ly} ly_list[row]={ly_list[row]}")
+        print(f"[DEBUG-NAN] S(singular values)={S[row]}")
+        print(f"[DEBUG-NAN] s_pow={s_pow[row]}")
+        print(f"[DEBUG-NAN] total_pow={total_pow[row]}")
+        print(f"[DEBUG-NAN] i_pow(before clamp would be total-s)={ (total_pow[row]-s_pow[row]) }")
+        print(f"[DEBUG-NAN] n_pow={n_pow[row]}")
+        print(f"[DEBUG-NAN] p_allo_gpu[row]={p_allo_gpu[row]}")
+        print(f"[DEBUG-NAN] active_mask/W_MMSE col norm={torch.abs(W_MMSE[row]).pow(2).sum(dim=0)}")
+
     c_subcarrier = torch.sum(torch.real(c_ly), dim=1)
     
     # 形状を [B, K] に戻す
