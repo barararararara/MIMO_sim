@@ -622,6 +622,8 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     P_max_per_sub, flat_beam_idx = torch.max(P_sub_dash_dBm.view(B, V, -1), dim=2)
     best_pa, best_pe = flat_beam_idx // Q, flat_beam_idx % Q
     active_mask = (P_max_per_sub > threshold_dBm).view(B, 1, V, 1)
+    # 試行ごとに実際にビームが割り当てられた(閾値を超えた)サブアレー数 V'
+    num_active_v = active_mask.view(B, V).sum(dim=1)
 
     w_DD_selected = DFT_weights[best_pa, best_pe]
     h_uvk = torch.einsum('bvyz, buvkyz -> buvk', w_DD_selected, a_uvkqyqz)
@@ -652,4 +654,4 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     
     h_w_denoised = torch.fft.fft(h_tau_2k_masked, dim=-1)[..., :K]
 
-    return h_uvk_tru, h_w_denoised
+    return h_uvk_tru, h_w_denoised, num_active_v

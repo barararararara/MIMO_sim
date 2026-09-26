@@ -87,6 +87,9 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
         # Type: 0=真のチャネル(理想), 1=推定チャネル(現実)
         all_cap = np.zeros((len(d_values), len(Ssub_list), total_trials, 2))
         all_ly  = np.zeros((len(d_values), len(Ssub_list), total_trials, 2))
+        # 実際にビームが割り当てられたサブアレー数 V' (d, Ssub, Trial)。
+        # Ly(選ばれたレイヤ数)がこれを上回っていないか比較するための診断用データ。
+        all_active_v = np.zeros((len(d_values), len(Ssub_list), total_trials))
 
         # ファイル名に試行数とタイムスタンプを含め、設定を変えて再実行した際に
         # 過去の結果を気づかず上書きしてしまわないようにする(ループ開始前に1回だけ決める)
@@ -113,7 +116,7 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                     actual_b = batch['chi'].shape[0]
 
                     # 1. GPUでチャネル行列計算 (真のチャネル / 推定・デノイズ後チャネル)
-                    h_tru, h_est = ch_func.simulation_core_channelcalculation_gpu(
+                    h_tru, h_est, num_active_v = ch_func.simulation_core_channelcalculation_gpu(
                         batch, d, Ssub, scenario, actual_b, config,
                         subarray_v_qy_qz=subarray_v_qy_qz, DFT_weights=DFT_weights
                     )
@@ -133,6 +136,7 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                     all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 1] = cap_est
                     all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 0] = ly_tru
                     all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 1] = ly_est
+                    all_active_v[d_idx, ssub_idx, s_idx:s_idx+actual_b] = num_active_v.cpu().numpy()
 
                 print("Done.")
 
@@ -141,6 +145,7 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                 np.savez(filename,
                         capacity=all_cap,
                         layers=all_ly,
+                        active_v=all_active_v,
                         d=d_values,
                         Ssub=Ssub_list,
                         total_trials=total_trials,
