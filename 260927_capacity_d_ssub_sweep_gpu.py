@@ -1,4 +1,6 @@
-# 260331_rcs_ishigaki_gpu_main.py
+# 260927_capacity_d_ssub_sweep_gpu.py
+# 通信距離d・サブアレー間隔Ssubをスイープし、真のチャネル/推定チャネルの
+# 水注水定理容量をGPUで一括計算する(Sub-THz帯MIMO容量特性評価用)
 import os
 import numpy as np
 import Channel_function_gpu as ch_func

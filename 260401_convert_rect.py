@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 import Channel_functions as channel
 
-# 元データ・rectデータの置き場所 (260331_rcs_ishigaki_gpu_main.py と同じ場所を使うこと)。
+# 元データ・rectデータの置き場所 (260927_capacity_d_ssub_sweep_gpu.py と同じ場所を使うこと)。
 # 環境変数 MIMO_SIM_DATA_DIR が設定されていればそこを、無ければこのスクリプトと
 # 同じディレクトリ(リポジトリ直下)を使う。Windows開発機とLinux実行機など、
 # マシンによってデータの置き場所が違っても環境変数だけで切り替えられるようにするため。
