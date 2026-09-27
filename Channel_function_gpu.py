@@ -591,6 +591,7 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     phi_rad_v, theta_rad_v, varphi_rad_v, eta_rad_v = calc_all_angles_batched(angle_batch, MUE_coordinate, subarray_v_qy_qz)
 
     Pi_mW = calc_Pi_mW_batched(Pr_dBm, base_batch, scenario=scenario)
+    print(f"[DEBUG-CMP] Pr_dBm={Pr_dBm} Pi_mW(nonzero, row0)={Pi_mW[0][Pi_mW[0]!=0]}")
     Pi_mW_per_carrier = Pi_mW / num_carriers
 
     if DFT_weights is None:
@@ -645,6 +646,8 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
 
     # 真のチャネル
     h_uvk_tru = h_uvk * active_mask
+    h0 = h_uvk_tru[0, :, :, 0]  # (U, V) 先頭サブキャリアのみ、CPU版のHと比較用
+    print(f"[DEBUG-CMP] num_active_v[0]={num_active_v[0].item()} h_uvk_tru[0,:,:,0] norm(fro)={torch.linalg.norm(h0).item():.6e} abs_max={h0.abs().max().item():.6e}")
 
     # --- デノイズ (ゼロマスキング) ---
     sigma_dash = 1.778 * 1e-6
