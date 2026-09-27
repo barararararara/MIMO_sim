@@ -510,8 +510,19 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # --- 全データ集計処理 ---
     # 各サブキャリア・各レイヤの容量算出
     c_ly = torch.log2(s_pow / (i_pow + n_pow) + 1.0)
+
+    # 各行(サブキャリア×試行)ごとの本当のレイヤ数 ly_list[row] は、バッチ全体の
+    # max_ly より小さいことがある。その差分のレイヤは A(電力配分)が0のパディング
+    # スロットで、s_pow=i_pow=n_pow が全て0になり得るため 0/0 のNaNを生むことがある。
+    # そのレイヤが本当にそのサブキャリアで有効かどうかで明示的にマスクし、
+    # パディング分は(内部の計算がNaNだろうと)容量0として扱う。
+    ly_tensor = torch.tensor(ly_list, device=device)  # (B*K,)
+    layer_idx = torch.arange(max_ly, device=device).view(1, -1)  # (1, max_ly)
+    layer_valid = layer_idx < ly_tensor.view(-1, 1)  # (B*K, max_ly)
+    c_ly = torch.where(layer_valid, c_ly, torch.zeros_like(c_ly))
+
     c_subcarrier = torch.sum(torch.real(c_ly), dim=1)
-    
+
     # 形状を [B, K] に戻す
     c_trials_k = c_subcarrier.view(B, K)
     ly_trials_k = torch.tensor(ly_list, device=device).view(B, K).float()
