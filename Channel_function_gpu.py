@@ -497,7 +497,11 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     W_MMSE = torch.bmm(inv_term, h_eff_h).transpose(-2, -1)
     
     # 5. SINR計算
-    B_mat = torch.bmm(torch.bmm(W_MMSE.conj().transpose(-2, -1), h_eff), A)
+    # W_MMSE = (逆行列 @ h_eff_h).transpose(-2,-1) は既に正しいMMSE行列Mの転置(M.T)。
+    # CPU版(260205_VTCFall.py)は B = Wr.T @ H_tru @ Te_H @ A (共役なしのWr.T=M)を使っているが、
+    # ここでは誤って更に共役を取っており(conj(M)を使ってしまい)、合成後の信号利得が
+    # 本来と異なる値になり容量が過小評価されていた。
+    B_mat = torch.bmm(torch.bmm(W_MMSE.transpose(-2, -1), h_eff), A)
     
     s_pow = torch.abs(torch.diagonal(B_mat, dim1=-2, dim2=-1))**2
     total_pow = torch.sum(torch.abs(B_mat)**2, dim=-1)
