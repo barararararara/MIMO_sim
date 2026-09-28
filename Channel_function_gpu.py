@@ -575,7 +575,10 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     
     # 各種バッチ計算関数の呼び出し (ch_func等は定義済みとする)
     lam_cen_t = torch.tensor(lam_cen, device=device, dtype=torch.float32)
-    Pr_dBm = calc_Pr_batched(lam_cen_t, d, base_batch['chi'], scenario, Pt_dBm=10, do=1.0)
+    # CPU版(260205_VTCFall.py)は Pt_dBm に config.Pu_dBm(UEの実際の送信電力)を渡しているが、
+    # ここでは関数のデフォルト値 10 のまま固定されており、config.Pu_dBm(=30dBm)が
+    # 一度も使われていなかった。20dBの差(=100倍)がPi_mW以降すべてに伝播していた。
+    Pr_dBm = calc_Pr_batched(lam_cen_t, d, base_batch['chi'], scenario, Pt_dBm=config.Pu_dBm, do=1.0)
     t_nm = abs_timedelays_batched(d, base_batch)
     R, MUE_coordinate = Mirror_UE_positions_batched(d, base_batch, theta_rad, phi_rad)
     if subarray_v_qy_qz is None:
@@ -591,7 +594,6 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     phi_rad_v, theta_rad_v, varphi_rad_v, eta_rad_v = calc_all_angles_batched(angle_batch, MUE_coordinate, subarray_v_qy_qz)
 
     Pi_mW = calc_Pi_mW_batched(Pr_dBm, base_batch, scenario=scenario)
-    print(f"[DEBUG-CMP] Pr_dBm={Pr_dBm} Pi_mW(nonzero, row0)={Pi_mW[0][Pi_mW[0]!=0]}")
     Pi_mW_per_carrier = Pi_mW / num_carriers
 
     if DFT_weights is None:
@@ -646,8 +648,6 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
 
     # 真のチャネル
     h_uvk_tru = h_uvk * active_mask
-    h0 = h_uvk_tru[0, :, :, 0]  # (U, V) 先頭サブキャリアのみ、CPU版のHと比較用
-    print(f"[DEBUG-CMP] num_active_v[0]={num_active_v[0].item()} h_uvk_tru[0,:,:,0] norm(fro)={torch.linalg.norm(h0).item():.6e} abs_max={h0.abs().max().item():.6e}")
 
     # --- デノイズ (ゼロマスキング) ---
     sigma_dash = 1.778 * 1e-6
