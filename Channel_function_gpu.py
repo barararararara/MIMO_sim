@@ -665,33 +665,33 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     sigma_dash_base = 2.512 * 1e-6
     Pu_mW_per_carrer = Pu_mW / num_carriers
     sigma_dash = sigma_dash_base / (Pu_mW_per_carrer ** 0.5)
-    N_AVG = 10
-    sigma_dash_avg = sigma_dash / (N_AVG ** 0.5)
-    n_dash = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma_dash_avg
-    h_uvk_est = (h_uvk_tru + n_dash) * active_mask
 
-    # --- 雑音低減 その2: 遅延領域でのゼロマスキング (このあと) ---
-
-    # 位相補正
-    t_nm_min = t_nm[:, 0, 0].view(B, 1, 1, 1)
-    h_est_corrected = h_uvk_est * torch.exp(1j * 2 * torch.pi * f_GHz.view(1, 1, 1, -1) * t_nm_min)
-
-    # 2K-IDFT/DFT デノイズ
-    h_w_rev = torch.flip(h_est_corrected, dims=[-1])
-    h_w_2k = torch.cat([h_est_corrected, h_w_rev], dim=-1)
-    h_tau_2k = torch.fft.ifft(h_w_2k, dim=-1)
-
+    # --- 雑音低減 その2: 遅延領域でのゼロマスキング ---
     # f_GHz はGHz単位の値なので、Hz単位に変換してからdtを計算する必要がある。
     # 変換を忘れると dt が1e9倍大きくなり、100e-9/dt が実質0になって
-    # L_idx=0 → 下のマスクが配列全体([0:2K])を丸ごとゼロにしてしまい、
+    # L_idx=0 → マスクが配列全体([0:2K])を丸ごとゼロにしてしまい、
     # h_est(推定チャネル)が常に完全にゼロになってしまっていた。
     df = (f_GHz[1] - f_GHz[0]).item() * 1e9  # GHz → Hz
     dt = 1.0 / (2 * K * df) # 2Kポイントなので分母は2K
     L_idx = int(round(100e-9 / dt))
-    
-    h_tau_2k_masked = h_tau_2k.clone()
-    h_tau_2k_masked[..., L_idx : 2*K - L_idx] = 0 # 100ns以降をマスク
-    
-    h_w_denoised = torch.fft.fft(h_tau_2k_masked, dim=-1)[..., :K]
+    t_nm_min = t_nm[:, 0, 0].view(B, 1, 1, 1)
 
-    return h_uvk_tru, h_w_denoised, num_active_v
+    def _estimate_and_denoise(sigma):
+        # 単発雑音を加えてから、位相補正 → 2K-IDFT/DFT遅延領域デノイズを行う。
+        # 同相加算(平均化)の有無は呼び出し側で sigma に反映する(平均化ありなら
+        # sigma/sqrt(N_AVG)を渡すだけで、統計的に等価)。
+        n = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma
+        h_est = (h_uvk_tru + n) * active_mask
+        h_est_corrected = h_est * torch.exp(1j * 2 * torch.pi * f_GHz.view(1, 1, 1, -1) * t_nm_min)
+        h_rev = torch.flip(h_est_corrected, dims=[-1])
+        h_2k = torch.cat([h_est_corrected, h_rev], dim=-1)
+        h_tau_2k = torch.fft.ifft(h_2k, dim=-1)
+        h_tau_2k_masked = h_tau_2k.clone()
+        h_tau_2k_masked[..., L_idx : 2*K - L_idx] = 0  # 100ns以降をマスク
+        return torch.fft.fft(h_tau_2k_masked, dim=-1)[..., :K]
+
+    N_AVG = 10
+    h_w_denoised = _estimate_and_denoise(sigma_dash / (N_AVG ** 0.5))       # 同相加算あり (最終手法, 従来のh_est)
+    h_w_denoised_single = _estimate_and_denoise(sigma_dash)                 # 単発・平均化なし (Before比較用)
+
+    return h_uvk_tru, h_w_denoised, num_active_v, h_w_denoised_single

@@ -86,9 +86,10 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
         base_all = np.load(rect_file, allow_pickle=True).item()
 
         # 結果格納用配列: (d, Ssub, Trial, Type)
-        # Type: 0=真のチャネル(理想), 1=推定チャネル(現実)
-        all_cap = np.zeros((len(d_values), len(Ssub_list), total_trials, 2))
-        all_ly  = np.zeros((len(d_values), len(Ssub_list), total_trials, 2))
+        # Type: 0=真のチャネル(理想), 1=推定チャネル(同相加算+遅延デノイズ後、最終手法),
+        #       2=推定チャネル(単発・平均化なし、Before比較用)
+        all_cap = np.zeros((len(d_values), len(Ssub_list), total_trials, 3))
+        all_ly  = np.zeros((len(d_values), len(Ssub_list), total_trials, 3))
         # 実際にビームが割り当てられたサブアレー数 V' (d, Ssub, Trial)。
         # Ly(選ばれたレイヤ数)がこれを上回っていないか比較するための診断用データ。
         all_active_v = np.zeros((len(d_values), len(Ssub_list), total_trials))
@@ -117,8 +118,8 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                     # その実際のサイズを使う (固定の B を使うと形状不一致でクラッシュする)
                     actual_b = batch['chi'].shape[0]
 
-                    # 1. GPUでチャネル行列計算 (真のチャネル / 推定・デノイズ後チャネル)
-                    h_tru, h_est, num_active_v = ch_func.simulation_core_channelcalculation_gpu(
+                    # 1. GPUでチャネル行列計算 (真のチャネル / 推定・デノイズ後チャネル / 単発推定チャネル)
+                    h_tru, h_est, num_active_v, h_est_single = ch_func.simulation_core_channelcalculation_gpu(
                         batch, d, Ssub, scenario, actual_b, config,
                         subarray_v_qy_qz=subarray_v_qy_qz, DFT_weights=DFT_weights
                     )
@@ -128,16 +129,22 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                     cap_tru, ly_tru = ch_func.calc_channel_capacity_hybrid_all_data(
                         h_tru, h_tru, config, ch_func.water_filling_ratio
                     )
-                    # Case B: 推定チャネルでの実力値
+                    # Case B: 推定チャネルでの実力値(同相加算+遅延デノイズ後、最終手法)
                     cap_est, ly_est = ch_func.calc_channel_capacity_hybrid_all_data(
                         h_est, h_tru, config, ch_func.water_filling_ratio
+                    )
+                    # Case C: 単発・平均化なしの推定チャネル(Before比較用)
+                    cap_est_single, ly_est_single = ch_func.calc_channel_capacity_hybrid_all_data(
+                        h_est_single, h_tru, config, ch_func.water_filling_ratio
                     )
 
                     # 結果を格納 (actual_b 個分を一気に入れる)
                     all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 0] = cap_tru
                     all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 1] = cap_est
+                    all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 2] = cap_est_single
                     all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 0] = ly_tru
                     all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 1] = ly_est
+                    all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 2] = ly_est_single
                     all_active_v[d_idx, ssub_idx, s_idx:s_idx+actual_b] = num_active_v.cpu().numpy()
 
                 print("Done.")
