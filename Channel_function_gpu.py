@@ -653,10 +653,17 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     # 真のチャネル
     h_uvk_tru = h_uvk * active_mask
 
-    # --- デノイズ (ゼロマスキング) ---
+    # --- 雑音低減 その1: パイロット10回分の同相加算(平均) ---
+    # 独立な雑音をN_AVG回生成して平均するのと、標準偏差を1/sqrt(N_AVG)にして
+    # 1回だけ生成するのは統計的に等価(平均のばらつきは元の分散/N_AVGになる)。
+    # メモリ・計算量を抑えるため後者で実装する。
     sigma_dash = 1.778 * 1e-6
-    n_dash = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma_dash
+    N_AVG = 10
+    sigma_dash_avg = sigma_dash / (N_AVG ** 0.5)
+    n_dash = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma_dash_avg
     h_uvk_est = (h_uvk_tru + n_dash) * active_mask
+
+    # --- 雑音低減 その2: 遅延領域でのゼロマスキング (このあと) ---
 
     # 位相補正
     t_nm_min = t_nm[:, 0, 0].view(B, 1, 1, 1)
