@@ -654,10 +654,17 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     h_uvk_tru = h_uvk * active_mask
 
     # --- 雑音低減 その1: パイロット10回分の同相加算(平均) ---
+    # sigma_dash_base=2.512e-6 は、単発(平均化前)の雑音の基本値(旧noise_dash関数の値)。
+    # チャネル振幅がPu_mW(UE送信電力)で正規化された"デジタル領域"表現になっているため、
+    # 雑音側も1キャリアあたりのUE送信電力 Pu_mW_per_carrer で正規化する
+    # (/sqrt(Pu_mW_per_carrer))。この正規化がないと、電力の効果が
+    # チャネル側だけに乗って雑音側に乗らず、SNRの物理的な意味が崩れてしまう。
     # 独立な雑音をN_AVG回生成して平均するのと、標準偏差を1/sqrt(N_AVG)にして
     # 1回だけ生成するのは統計的に等価(平均のばらつきは元の分散/N_AVGになる)。
     # メモリ・計算量を抑えるため後者で実装する。
-    sigma_dash = 1.778 * 1e-6
+    sigma_dash_base = 2.512 * 1e-6
+    Pu_mW_per_carrer = Pu_mW / num_carriers
+    sigma_dash = sigma_dash_base / (Pu_mW_per_carrer ** 0.5)
     N_AVG = 10
     sigma_dash_avg = sigma_dash / (N_AVG ** 0.5)
     n_dash = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma_dash_avg
