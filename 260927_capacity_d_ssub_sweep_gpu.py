@@ -76,6 +76,16 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
     # DFTウェイトは d/Ssub/batch に依存しないため、全ループの外で1回だけ計算して使い回す
     DFT_weights = ch_func.DFT_weight_calc_gpu(config.Q, device=device)
 
+    # 乱数シードのベース値(CPU版のbase_seed=9と合わせている)。試行の絶対インデックスと
+    # 組み合わせることで、後から同じ試行番号だけをB=1で単独計算しても、この一括実行と
+    # 全く同じ乱数(パイロット雑音・チャネル推定雑音)を再現できる。
+    base_seed = 9
+
+    # チャネル種別: 0=真のチャネル, 1=推定(同相加算+遅延デノイズ、最終手法),
+    #              2=推定(単発・遅延デノイズのみ), 3=推定(単発・デノイズなし、生)
+    N_TYPES = 4
+    TYPE_LABELS = ["true", "est_avg_denoised", "est_single_denoised", "est_single_raw"]
+
     for scenario in scenarios:
         print(f"=== Starting Scenario: {scenario} ===")
         # ベースデータのロード (あらかじめ用意されたNYUSIM出力)
@@ -85,14 +95,19 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
         channel.ensure_rect_data_fresh(source_file, rect_file)
         base_all = np.load(rect_file, allow_pickle=True).item()
 
-        # 結果格納用配列: (d, Ssub, Trial, Type)
-        # Type: 0=真のチャネル(理想), 1=推定チャネル(同相加算+遅延デノイズ後、最終手法),
-        #       2=推定チャネル(単発・平均化なし、Before比較用)
-        all_cap = np.zeros((len(d_values), len(Ssub_list), total_trials, 3))
-        all_ly  = np.zeros((len(d_values), len(Ssub_list), total_trials, 3))
+        # 結果格納用配列
+        # capacity: (d, Ssub, Trial, Type, Mode)  Mode: 0=空間多重あり, 1=空間多重なし(単一レイヤ)
+        all_cap = np.zeros((len(d_values), len(Ssub_list), total_trials, N_TYPES, 2))
+        # layers/eig/p_ratio は空間多重ありの場合のみ意味を持つ(単一レイヤは常にLy=1で自明なため)
+        all_ly      = np.zeros((len(d_values), len(Ssub_list), total_trials, N_TYPES))
+        all_eig     = np.zeros((len(d_values), len(Ssub_list), total_trials, N_TYPES, config.U))
+        all_pratio  = np.zeros((len(d_values), len(Ssub_list), total_trials, N_TYPES, config.U))
         # 実際にビームが割り当てられたサブアレー数 V' (d, Ssub, Trial)。
         # Ly(選ばれたレイヤ数)がこれを上回っていないか比較するための診断用データ。
         all_active_v = np.zeros((len(d_values), len(Ssub_list), total_trials))
+        # ビーム割り当て結果 (d, Ssub, Trial, V): 各サブアレーが選んだビーム番号(pa, pe)
+        all_beam_pa = np.zeros((len(d_values), len(Ssub_list), total_trials, config.V), dtype=np.int64)
+        all_beam_pe = np.zeros((len(d_values), len(Ssub_list), total_trials, config.V), dtype=np.int64)
 
         # ファイル名に試行数とタイムスタンプを含め、設定を変えて再実行した際に
         # 過去の結果を気づかず上書きしてしまわないようにする(ループ開始前に1回だけ決める)
@@ -117,35 +132,35 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                     # total_trials が B で割り切れない場合、最後のバッチは B 個に満たない。
                     # その実際のサイズを使う (固定の B を使うと形状不一致でクラッシュする)
                     actual_b = batch['chi'].shape[0]
+                    trial_indices = torch.arange(s_idx, s_idx + actual_b, device=device)
 
-                    # 1. GPUでチャネル行列計算 (真のチャネル / 推定・デノイズ後チャネル / 単発推定チャネル)
-                    h_tru, h_est, num_active_v, h_est_single = ch_func.simulation_core_channelcalculation_gpu(
-                        batch, d, Ssub, scenario, actual_b, config,
-                        subarray_v_qy_qz=subarray_v_qy_qz, DFT_weights=DFT_weights
-                    )
+                    # 1. GPUでチャネル行列計算
+                    h_tru, h_est, num_active_v, h_est_single, h_est_single_raw, best_pa, best_pe = \
+                        ch_func.simulation_core_channelcalculation_gpu(
+                            batch, d, Ssub, scenario, actual_b, config,
+                            subarray_v_qy_qz=subarray_v_qy_qz, DFT_weights=DFT_weights,
+                            trial_indices=trial_indices, base_seed=base_seed
+                        )
 
-                    # 2. チャネル容量計算 (ハイブリッド方式)
-                    # Case A: 真のチャネルでの理想性能
-                    cap_tru, ly_tru = ch_func.calc_channel_capacity_hybrid_all_data(
-                        h_tru, h_tru, config, ch_func.water_filling_ratio
-                    )
-                    # Case B: 推定チャネルでの実力値(同相加算+遅延デノイズ後、最終手法)
-                    cap_est, ly_est = ch_func.calc_channel_capacity_hybrid_all_data(
-                        h_est, h_tru, config, ch_func.water_filling_ratio
-                    )
-                    # Case C: 単発・平均化なしの推定チャネル(Before比較用)
-                    cap_est_single, ly_est_single = ch_func.calc_channel_capacity_hybrid_all_data(
-                        h_est_single, h_tru, config, ch_func.water_filling_ratio
-                    )
+                    channels_by_type = [h_tru, h_est, h_est_single, h_est_single_raw]
 
-                    # 結果を格納 (actual_b 個分を一気に入れる)
-                    all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 0] = cap_tru
-                    all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 1] = cap_est
-                    all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, 2] = cap_est_single
-                    all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 0] = ly_tru
-                    all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 1] = ly_est
-                    all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, 2] = ly_est_single
+                    # 2. チャネル容量計算(空間多重あり・なしの両方、4種類のチャネルそれぞれ)
+                    for t_idx, h_use_t in enumerate(channels_by_type):
+                        cap_m, ly_m, eig_m, pratio_m = ch_func.calc_channel_capacity_hybrid_all_data(
+                            h_use_t, h_tru, config, ch_func.water_filling_ratio
+                        )
+                        cap_s, _, _, _ = ch_func.calc_channel_capacity_hybrid_all_data(
+                            h_use_t, h_tru, config, ch_func.water_filling_ratio, force_single_layer=True
+                        )
+                        all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx, 0] = cap_m
+                        all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx, 1] = cap_s
+                        all_ly[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx] = ly_m
+                        all_eig[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx, :] = eig_m
+                        all_pratio[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx, :] = pratio_m
+
                     all_active_v[d_idx, ssub_idx, s_idx:s_idx+actual_b] = num_active_v.cpu().numpy()
+                    all_beam_pa[d_idx, ssub_idx, s_idx:s_idx+actual_b, :] = best_pa.cpu().numpy()
+                    all_beam_pe[d_idx, ssub_idx, s_idx:s_idx+actual_b, :] = best_pe.cpu().numpy()
 
                 print("Done.")
 
@@ -154,7 +169,13 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
                 np.savez(filename,
                         capacity=all_cap,
                         layers=all_ly,
+                        eigenvalues=all_eig,
+                        power_ratio=all_pratio,
                         active_v=all_active_v,
+                        beam_pa=all_beam_pa,
+                        beam_pe=all_beam_pe,
+                        type_labels=TYPE_LABELS,
+                        base_seed=base_seed,
                         d=d_values,
                         Ssub=Ssub_list,
                         total_trials=total_trials,

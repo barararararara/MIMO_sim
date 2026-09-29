@@ -329,18 +329,40 @@ def define_a_batched(V, phi_rad_v, theta_rad_v):
     
     return a
 
-def noise_n_k_v_batched(B, V, K, device):
+def seeded_randn(shape, trial_indices, base_seed, device, dtype=torch.float32):
+    """
+    バッチの先頭次元(B)を、試行ごとに独立した乱数生成器で埋める。
+    バッチサイズBやバッチ内の開始位置に依存せず、「試行の絶対インデックス
+    (trial_indices[i]) + base_seed」だけでその試行の乱数列が決まるため、
+    後から同じ試行番号だけを単独(B=1)で再計算しても、集計(平均)に使った
+    元の実行と全く同じ乱数を再現できる。
+    shape: (B, ...)  trial_indices: (B,) の絶対試行インデックス
+    """
+    B = shape[0]
+    rest_shape = shape[1:]
+    out = torch.empty(shape, device=device, dtype=dtype)
+    for i in range(B):
+        seed = int(base_seed) + int(trial_indices[i].item())
+        gen = torch.Generator(device=device)
+        gen.manual_seed(seed)
+        out[i] = torch.randn(rest_shape, device=device, dtype=dtype, generator=gen)
+    return out
+
+def noise_n_k_v_batched(B, V, K, device, trial_indices=None, base_seed=0):
     """
     (B, V, K) サイズの複素乱数を一括生成する
     """
     # 標準偏差 1.778e-6
     sigma = 1.778 * 1e-6
-    
-    # torch.randn で一気に生成 (B, V, K)
-    # 複素数として生成するために torch.complex を使用
-    real_part = torch.randn((B, V, K), device=device) * sigma
-    imag_part = torch.randn((B, V, K), device=device) * sigma
-    
+
+    if trial_indices is not None:
+        real_part = seeded_randn((B, V, K), trial_indices, base_seed, device) * sigma
+        imag_part = seeded_randn((B, V, K), trial_indices, base_seed + 1, device) * sigma
+    else:
+        # trial_indices未指定なら再現性を保証しない従来通りの一括生成(後方互換)
+        real_part = torch.randn((B, V, K), device=device) * sigma
+        imag_part = torch.randn((B, V, K), device=device) * sigma
+
     n_k_v = torch.complex(real_part, imag_part)
     return n_k_v
 
@@ -428,12 +450,18 @@ def water_filling_ratio(eig_vals, Pt, P_noise, iters=200, rel_eps=1e-6):
 
     return p_ratio, Ly
 
-def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_func):
+def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_func, force_single_layer=False):
     """
     h_use:  重み（SVD・注水定理）の決定に使用するチャネル [B, U, V, K]
     h_true: 実際の伝搬環境（真のチャネル） [B, U, V, K]
     config: SystemConfig インスタンス
     water_filling_func: CPU側の注水定理関数
+    force_single_layer: True の場合、注水定理の結果を無視し、常に最大固有値の
+                         レイヤ(Ly=1)だけに全電力を割り振る(空間多重を行わない場合の容量)。
+
+    戻り値: cap_per_trial, ly_per_trial, eig_per_trial, p_ratio_per_trial
+        eig_per_trial, p_ratio_per_trial は (B, config.U) で、config.U 番目まで
+        固有値・電力配分比率(サブキャリア平均)をパディングしたもの。
     """
     # このあとのSVD/MMSE/SINR計算はCPU版(numpyのfloat64)と同じ精度で行う。
     # ここで扱う行列は (B*K, U, V) 程度で小さく(巨大なのはチャネル行列を作る
@@ -456,26 +484,40 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     
     # 2. 特異値をCPUへ転送して注水定理を実行（ハイブリッド処理）
     S_cpu = S.detach().cpu().numpy()
-    eig_vals = S_cpu ** 2 # グラム行列の固有値に対応
-    
+    eig_vals = S_cpu ** 2 # グラム行列の固有値に対応 (B*K, U)
+
+    # 固有値のサブキャリア平均 (B, U) を診断用に保存しておく
+    eig_per_trial = eig_vals.reshape(B, K, -1).mean(axis=1)
+
     p_allo_list = []
     ly_list = []
-    
+
     # CPUで各サブキャリアの電力配分を計算
     for ev in eig_vals:
-        p_ratio, ly = water_filling_func(ev, config.Pt_mW, config.P_noise_mW)
+        if force_single_layer:
+            # 空間多重を行わない場合: 常に最大固有値のレイヤ(先頭、eig_valsは降順)
+            # だけに全電力を割り振る
+            p_ratio, ly = np.array([1.0]), 1
+        else:
+            p_ratio, ly = water_filling_func(ev, config.Pt_mW, config.P_noise_mW)
         p_allo_list.append(p_ratio)
         ly_list.append(ly)
-        
+
     max_ly = max(ly_list) if ly_list else 0
     if max_ly == 0:
-        return np.zeros(B), np.zeros(B)
-    
+        zeros_eig = np.zeros((B, config.U))
+        return np.zeros(B), np.zeros(B), zeros_eig, zeros_eig
+
     # 3. 結果をGPUに戻して並列計算
     p_allo_gpu = torch.zeros((B*K, max_ly), device=device, dtype=torch.float64)
     for i, p in enumerate(p_allo_list):
         if ly_list[i] > 0:
             p_allo_gpu[i, :ly_list[i]] = torch.tensor(p, device=device)
+
+    # 電力配分比率のサブキャリア平均 (B, U) も診断用に保存しておく(config.U幅にパディング)
+    p_ratio_per_trial = np.zeros((B, config.U))
+    p_allo_cpu = p_allo_gpu.detach().cpu().numpy().reshape(B, K, max_ly).mean(axis=1)
+    p_ratio_per_trial[:, :max_ly] = p_allo_cpu
     
     # 送信ウェイト Te_H: 右特異ベクトルの複素共役転置から有効分を抽出
     # ※ PyTorchのバージョンにより、Vh.mch() または Vh.conj().transpose(-2, -1) を使用
@@ -534,12 +576,13 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # 各試行における全サブキャリアの平均値を算出
     cap_per_trial = torch.mean(c_trials_k, dim=1).cpu().numpy()
     ly_per_trial = torch.mean(ly_trials_k, dim=1).cpu().numpy()
-    
-    return cap_per_trial, ly_per_trial
+
+    return cap_per_trial, ly_per_trial, eig_per_trial, p_ratio_per_trial
 
 # シミュレーションの大筋のcore部分
 def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B, config: SystemConfig,
-                                            subarray_v_qy_qz=None, DFT_weights=None):
+                                            subarray_v_qy_qz=None, DFT_weights=None,
+                                            trial_indices=None, base_seed=0):
     """
     config (SystemConfig): システムパラメータの塊
     d (float): 通信距離
@@ -550,6 +593,11 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     DFT_weights: 事前計算済みのDFTウェイト (Q,Q,Q,Q)。d/Ssub_lam/batchに依存しないため、
                  呼び出し側でループの外で1回だけ計算して使い回すと効率的。
                  未指定なら関数内で毎回計算する(後方互換)。
+    trial_indices: (B,) の各試行の絶対インデックス。指定すると、雑音生成が
+                    バッチサイズに依存せず試行ごとに再現可能になる(base_seedと合わせて、
+                    後から同じ試行番号だけをB=1で再計算しても同じ乱数になる)。
+                    未指定なら従来通り再現性なしで一括生成する。
+    base_seed: trial_indicesと組み合わせて使う乱数シードのベース値。
     """
     # configからパラメータを抽出
     device = config.device
@@ -636,7 +684,7 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     del complex_Amp_antena_chunks, a_uvkqyqz_chunks
 
     # 雑音とビーム割当
-    n_k_v = noise_n_k_v_batched(B, V, num_carriers, device)
+    n_k_v = noise_n_k_v_batched(B, V, num_carriers, device, trial_indices=trial_indices, base_seed=base_seed)
     P_sub_dash_dBm = near_Power_inc_noise_batched(V, Q, DFT_weights, complex_Amp_antena, n_k_v)
 
     # ビーム選択ロジック
@@ -676,22 +724,31 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     L_idx = int(round(100e-9 / dt))
     t_nm_min = t_nm[:, 0, 0].view(B, 1, 1, 1)
 
-    def _estimate_and_denoise(sigma):
+    def _estimate_and_denoise(sigma, seed_offset):
         # 単発雑音を加えてから、位相補正 → 2K-IDFT/DFT遅延領域デノイズを行う。
         # 同相加算(平均化)の有無は呼び出し側で sigma に反映する(平均化ありなら
         # sigma/sqrt(N_AVG)を渡すだけで、統計的に等価)。
-        n = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma
-        h_est = (h_uvk_tru + n) * active_mask
-        h_est_corrected = h_est * torch.exp(1j * 2 * torch.pi * f_GHz.view(1, 1, 1, -1) * t_nm_min)
+        # seed_offset は雑音源(パイロット雑音など)ごとに重ならないよう大きくずらした値。
+        if trial_indices is not None:
+            real = seeded_randn((B, U, V, K), trial_indices, base_seed + seed_offset, device) * sigma
+            imag = seeded_randn((B, U, V, K), trial_indices, base_seed + seed_offset + 1, device) * sigma
+            n = torch.complex(real, imag)
+        else:
+            n = torch.complex(torch.randn((B, U, V, K), device=device), torch.randn((B, U, V, K), device=device)) * sigma
+        h_est_raw = (h_uvk_tru + n) * active_mask
+        h_est_corrected = h_est_raw * torch.exp(1j * 2 * torch.pi * f_GHz.view(1, 1, 1, -1) * t_nm_min)
         h_rev = torch.flip(h_est_corrected, dims=[-1])
         h_2k = torch.cat([h_est_corrected, h_rev], dim=-1)
         h_tau_2k = torch.fft.ifft(h_2k, dim=-1)
         h_tau_2k_masked = h_tau_2k.clone()
         h_tau_2k_masked[..., L_idx : 2*K - L_idx] = 0  # 100ns以降をマスク
-        return torch.fft.fft(h_tau_2k_masked, dim=-1)[..., :K]
+        h_denoised = torch.fft.fft(h_tau_2k_masked, dim=-1)[..., :K]
+        return h_denoised, h_est_raw
 
     N_AVG = 10
-    h_w_denoised = _estimate_and_denoise(sigma_dash / (N_AVG ** 0.5))       # 同相加算あり (最終手法, 従来のh_est)
-    h_w_denoised_single = _estimate_and_denoise(sigma_dash)                 # 単発・平均化なし (Before比較用)
+    # 同相加算あり (最終手法、従来のh_est)
+    h_w_denoised, _ = _estimate_and_denoise(sigma_dash / (N_AVG ** 0.5), seed_offset=1_000_000)
+    # 単発・平均化なし。デノイズ後(Before比較用)と、デノイズも一切していない生のもの両方を保持する
+    h_w_denoised_single, h_est_single_raw = _estimate_and_denoise(sigma_dash, seed_offset=2_000_000)
 
-    return h_uvk_tru, h_w_denoised, num_active_v, h_w_denoised_single
+    return h_uvk_tru, h_w_denoised, num_active_v, h_w_denoised_single, h_est_single_raw, best_pa, best_pe
