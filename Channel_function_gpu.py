@@ -24,6 +24,9 @@ class SystemConfig:
     Pu_dBm: float = 30.0      # UEの送信電力(dBm)
     Pt_mW: float = 1000/2000  # 基地局送信電力(mW/サブキャリア)
     P_noise_mW: float = 6.31e-12 # 雑音電力(mW)
+    # 雑音の標準偏差(実部・虚部それぞれ) = sqrt(P_noise_mW/2)。チャネル推定雑音(パイロット)と、
+    # 受信側MMSE重みの計算に入れる雑音(CPU版の noise_dash_dash / N_dash_dash_ly)で共通に使う。
+    noise_std: float = 1.778e-6
 
     @property
     def lam(self):
@@ -120,7 +123,9 @@ def calc_anntena_xyz_Ssub_gpu(lam_cen, V, Q, Ssub_lam, device='cuda'):
             x_v = L / (2 * math.sqrt(3))
             y_v = -L/2 + p * (1 + (Q + 1) * v) + S_sub * v
             
-            x_vqyqz = torch.full_like(qy_idx, x_v)
+            # qy_idx は整数テンソルなので、full_like にdtypeを指定しないと x_v(数cm〜数十cm)が
+            # 整数に切り捨てられて0になり、0°面(v=0..3)のx座標が狂っていた。
+            x_vqyqz = torch.full_like(qy_idx, x_v, dtype=torch.float32)
             y_vqyqz = y_v + qy_idx * p
             coords = torch.stack([x_vqyqz, y_vqyqz, z], dim=-1)
 
@@ -450,7 +455,8 @@ def water_filling_ratio(eig_vals, Pt, P_noise, iters=200, rel_eps=1e-6):
 
     return p_ratio, Ly
 
-def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_func, force_single_layer=False):
+def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_func, force_single_layer=False,
+                                          trial_indices=None, base_seed=0, rx_noise=True):
     """
     h_use:  重み（SVD・注水定理）の決定に使用するチャネル [B, U, V, K]
     h_true: 実際の伝搬環境（真のチャネル） [B, U, V, K]
@@ -458,6 +464,12 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     water_filling_func: CPU側の注水定理関数
     force_single_layer: True の場合、注水定理の結果を無視し、常に最大固有値の
                          レイヤ(Ly=1)だけに全電力を割り振る(空間多重を行わない場合の容量)。
+    rx_noise: True の場合、受信側MMSE重みの計算に使う有効チャネル H_eff に雑音
+              (config.noise_std / sqrt(Pt_mW)、サブキャリア・レイヤごとに独立)を加える。
+              CPU版(260205_VTCFall.py の N_dash_dash_ly)と同じ。信号・干渉電力の計算
+              (B_mat)には雑音を含まない真の H_eff を使う。
+    trial_indices, base_seed: 指定すると、この雑音が試行の絶対インデックスで決まり、
+              バッチサイズに依存せず再現できる(チャネル推定雑音と同じ方式)。
 
     戻り値: cap_per_trial, ly_per_trial, eig_per_trial, p_ratio_per_trial
         eig_per_trial, p_ratio_per_trial は (B, config.U) で、config.U 番目まで
@@ -534,8 +546,24 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     gamma0 = config.Pt_mW / config.P_noise_mW
     I_ly = torch.eye(max_ly, device=device).unsqueeze(0)
     
-    h_eff_h = h_eff.conj().transpose(-2, -1)
-    inv_term = torch.linalg.inv(torch.bmm(h_eff_h, h_eff) + (max_ly / gamma0) * I_ly)
+    # 受信側が持つ有効チャネルの推定値(CPU版の H_eff = H_tru@Te_H + N_dash_dash_ly/sqrt(Pt))。
+    # MMSE重みはこの雑音入りの推定値から作り、信号・干渉電力の計算(B_mat)は真の h_eff で行う。
+    h_eff_rx = h_eff
+    if rx_noise:
+        # レイヤ数の最大値(max_ly)はバッチの組み合わせで変わるので、乱数は常に固定形状 (B, K, U, U) で
+        # 生成してから先頭 max_ly 列を切り出す(試行の乱数列がバッチ構成に依存しないようにする)。
+        n_shape = (B, K, U, U)
+        if trial_indices is not None:
+            n_re = seeded_randn(n_shape, trial_indices, base_seed + 3_000_000, device, torch.float64)
+            n_im = seeded_randn(n_shape, trial_indices, base_seed + 3_000_001, device, torch.float64)
+        else:
+            n_re = torch.randn(n_shape, device=device, dtype=torch.float64)
+            n_im = torch.randn(n_shape, device=device, dtype=torch.float64)
+        n_eff = torch.complex(n_re, n_im).reshape(B * K, U, U)[:, :, :max_ly]
+        h_eff_rx = h_eff + n_eff * (config.noise_std / math.sqrt(config.Pt_mW))
+
+    h_eff_h = h_eff_rx.conj().transpose(-2, -1)
+    inv_term = torch.linalg.inv(torch.bmm(h_eff_h, h_eff_rx) + (max_ly / gamma0) * I_ly)
     W_MMSE = torch.bmm(inv_term, h_eff_h).transpose(-2, -1)
     
     # 5. SINR計算
@@ -702,15 +730,18 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
     h_uvk_tru = h_uvk * active_mask
 
     # --- 雑音低減 その1: パイロット10回分の同相加算(平均) ---
-    # sigma_dash_base=2.512e-6 は、単発(平均化前)の雑音の基本値(旧noise_dash関数の値)。
+    # sigma_dash_base = 1.778e-6 (実部・虚部それぞれ。sqrt(6.31e-12/2))。単発(平均化前)の雑音の基本値。
+    # (4/2のコミット84f714dで noise_dash が 2.512e-6 → 1.778e-6 に直されている。2.512e-6は
+    #  複素雑音全体の標準偏差で、実部・虚部それぞれに使うと√2倍大きくなってしまう。)
     # チャネル振幅がPu_mW(UE送信電力)で正規化された"デジタル領域"表現になっているため、
     # 雑音側も1キャリアあたりのUE送信電力 Pu_mW_per_carrer で正規化する
     # (/sqrt(Pu_mW_per_carrer))。この正規化がないと、電力の効果が
     # チャネル側だけに乗って雑音側に乗らず、SNRの物理的な意味が崩れてしまう。
+    # 実効的な標準偏差は 1.778e-6/sqrt(0.5) = 2.51e-6 (実部・虚部それぞれ)。
     # 独立な雑音をN_AVG回生成して平均するのと、標準偏差を1/sqrt(N_AVG)にして
     # 1回だけ生成するのは統計的に等価(平均のばらつきは元の分散/N_AVGになる)。
     # メモリ・計算量を抑えるため後者で実装する。
-    sigma_dash_base = 2.512 * 1e-6
+    sigma_dash_base = config.noise_std
     Pu_mW_per_carrer = Pu_mW / num_carriers
     sigma_dash = sigma_dash_base / (Pu_mW_per_carrer ** 0.5)
 
