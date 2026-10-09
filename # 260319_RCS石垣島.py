@@ -479,9 +479,17 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
 
     # チャネル行列を計算　式49
     h_uvk = np.einsum('vyz,uvyzk->uvk', w_DD_pape_red, a_red, optimize=True)  # (V′)
+    h_uvk_true = h_uvk.copy()  # 雑音を一切加えていない、純粋な真のチャネル(GPU版のh_tru相当)
     if use_H == "E_wo":
-        h_uvk = h_uvk + n_dash_uv_vdash[:,:,:,0]  # (U, V′, K)
-    
+        # 非同相: 10回分のうち1回だけを使う (軸3が「10回分」の軸)
+        h_uvk = h_uvk + n_dash_uv_vdash[:, :, :, 0]  # (U, V′, K)
+    elif use_H == "E_w":
+        # 同相加算: 10回分の独立な雑音を平均する。
+        # 260205_VTCFall.pyのE_wは軸2(サブキャリア軸)を平均していて、
+        # 本来平均すべき軸3(10回分の測定軸)と取り違えたバグがあったため、
+        # ここで正しい軸(軸3)で平均するよう実装する。
+        h_uvk = h_uvk + n_dash_uv_vdash[:, :, :, :10].mean(axis=3)  # (U, V′, K)
+
 ###########################################################################################################################.
     h_uvk *= np.exp(1j * 2 * np.pi * f_GHz[None, None, :]*t_nm[0, 0])
 
@@ -596,8 +604,11 @@ def simulation_core(channel_type, Q, lam, d, Pu_dBm, Ssub_lam, Synario_Data, use
     """
     
     print(h_uvk)
-    
-    return h_uvk, H_w_denoised, ba
+
+    # H_tru_all として使う値は、雑音を含まない純粋な真のチャネル(GPU版と同じ設計)にする。
+    # (以前は雑音入り・デノイズ前のh_uvkを返しており、呼び出し側がH_tru_allとして使うと
+    #  GPU版の「h_tru=完全にノイズなし」という設計と食い違っていた)
+    return h_uvk_true, H_w_denoised, ba
 
 
 def sweep_capacity_vs_d_mc(

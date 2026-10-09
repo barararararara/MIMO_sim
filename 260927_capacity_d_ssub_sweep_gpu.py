@@ -146,11 +146,14 @@ def run_data_acquisition(scenario, d_values, Ssub_list, total_trials, B):
 
                     # 2. チャネル容量計算(空間多重あり・なしの両方、4種類のチャネルそれぞれ)
                     for t_idx, h_use_t in enumerate(channels_by_type):
+                        # 受信側MMSEの雑音も試行インデックスで固定する(4種のチャネル・多重/単一で同じ雑音を共有)
                         cap_m, ly_m, eig_m, pratio_m = ch_func.calc_channel_capacity_hybrid_all_data(
-                            h_use_t, h_tru, config, ch_func.water_filling_ratio
+                            h_use_t, h_tru, config, ch_func.water_filling_ratio,
+                            trial_indices=trial_indices, base_seed=base_seed
                         )
                         cap_s, _, _, _ = ch_func.calc_channel_capacity_hybrid_all_data(
-                            h_use_t, h_tru, config, ch_func.water_filling_ratio, force_single_layer=True
+                            h_use_t, h_tru, config, ch_func.water_filling_ratio, force_single_layer=True,
+                            trial_indices=trial_indices, base_seed=base_seed
                         )
                         all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx, 0] = cap_m
                         all_cap[d_idx, ssub_idx, s_idx:s_idx+actual_b, t_idx, 1] = cap_s
