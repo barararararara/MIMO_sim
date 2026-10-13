@@ -402,13 +402,19 @@ def near_Power_inc_noise_batched(V, Q, DFT_weight, complex_amp_antena, n_k_v):
     return P_sub_dash_dBm
 
 # 注水定理を実行する関数　ここだけCPUで処理する関数
-def water_filling_ratio(eig_vals, Pt, P_noise, iters=200, rel_eps=1e-6):
+def water_filling_ratio(eig_vals, Pt, P_noise, iters=200, rel_eps=0.0):
     """
     eig_vals: 固有値 λ_j
     Pt: 総送信電力
     P_noise: 雑音電力
-    rel_eps: 最大固有値に対してこの相対閾値未満の固有値は、実体のない
+    rel_eps: 最大固有値に対してこの相対閾値以下の固有値は、実体のない
              (信号が全く届いていない)レイヤとみなし水注水定理から除外する。
+             既定は0(固有値が正でありさえすれば水注水に任せる。CPU版と同じ定義)。
+             以前は1e-6だったが、λ4/λ1≈4e-7 のような弱いが実在するレイヤ(水注水で
+             数%の電力が配分される)まで除外してしまい、レイヤ数がCPU版より約1少なく
+             なっていた(チャネル#11, d=5m, Ssub=100λで 3.0 vs 3.9)。
+             固有値が数値的にゼロの層は、水注水の式 1/α - P_noise/g で電力が0になるので
+             相対閾値がなくても有効レイヤとは数えられない。
 
     サブアレーは3面(0°/120°/240°)構成のため、UEの位置やマルチパスの
     到来角によって実際に信号が届くサブアレー数は4/8/12と変わり得る。
@@ -544,8 +550,18 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     
     # 4. 受信側 MMSE 重みの算出 (B*K個を一気に計算)
     gamma0 = config.Pt_mW / config.P_noise_mW
-    I_ly = torch.eye(max_ly, device=device).unsqueeze(0)
-    
+
+    # 各行(サブキャリア×試行)の本当のレイヤ数 ly_list[row] は、バッチ全体の max_ly より
+    # 小さいことがある。余った(パディング)レイヤを MMSE の設計に含めてしまうと、存在しない
+    # ストリームを干渉として抑圧しようとして有効レイヤの利得が下がり、結果がバッチの
+    # 組み合わせ(max_ly)に依存してしまう(B=1とB=20で容量が約0.2 bps/Hz違った)。
+    # CPU版は各行で有効な Ly 列だけを使うので、それと同じになるようパディング列を
+    # ゼロにして、正規化項は有効レイヤ数 Ly/gamma0、パディング分の対角は1(逆行列が
+    # ブロック対角になり、有効ブロックはCPU版と一致、パディング側の重みは0)にする。
+    ly_tensor = torch.tensor(ly_list, device=device)  # (B*K,)
+    layer_idx = torch.arange(max_ly, device=device).view(1, -1)  # (1, max_ly)
+    layer_valid = layer_idx < ly_tensor.view(-1, 1)  # (B*K, max_ly)
+
     # 受信側が持つ有効チャネルの推定値(CPU版の H_eff = H_tru@Te_H + N_dash_dash_ly/sqrt(Pt))。
     # MMSE重みはこの雑音入りの推定値から作り、信号・干渉電力の計算(B_mat)は真の h_eff で行う。
     h_eff_rx = h_eff
@@ -562,8 +578,12 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
         n_eff = torch.complex(n_re, n_im).reshape(B * K, U, U)[:, :, :max_ly]
         h_eff_rx = h_eff + n_eff * (config.noise_std / math.sqrt(config.Pt_mW))
 
+    h_eff_rx = h_eff_rx * layer_valid.unsqueeze(1)  # パディング列をゼロに (B*K, U, max_ly)
+    reg = torch.where(layer_valid,
+                      (ly_tensor.to(torch.float64) / gamma0).view(-1, 1),
+                      torch.ones((), dtype=torch.float64, device=device))  # (B*K, max_ly)
     h_eff_h = h_eff_rx.conj().transpose(-2, -1)
-    inv_term = torch.linalg.inv(torch.bmm(h_eff_h, h_eff_rx) + (max_ly / gamma0) * I_ly)
+    inv_term = torch.linalg.inv(torch.bmm(h_eff_h, h_eff_rx) + torch.diag_embed(reg).to(h_eff_rx.dtype))
     W_MMSE = torch.bmm(inv_term, h_eff_h).transpose(-2, -1)
     
     # 5. SINR計算
@@ -590,9 +610,7 @@ def calc_channel_capacity_hybrid_all_data(h_use, h_true, config, water_filling_f
     # スロットで、s_pow=i_pow=n_pow が全て0になり得るため 0/0 のNaNを生むことがある。
     # そのレイヤが本当にそのサブキャリアで有効かどうかで明示的にマスクし、
     # パディング分は(内部の計算がNaNだろうと)容量0として扱う。
-    ly_tensor = torch.tensor(ly_list, device=device)  # (B*K,)
-    layer_idx = torch.arange(max_ly, device=device).view(1, -1)  # (1, max_ly)
-    layer_valid = layer_idx < ly_tensor.view(-1, 1)  # (B*K, max_ly)
+    # (layer_valid は MMSE の設計の前に計算済み)
     c_ly = torch.where(layer_valid, c_ly, torch.zeros_like(c_ly))
 
     c_subcarrier = torch.sum(torch.real(c_ly), dim=1)
