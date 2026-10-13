@@ -12,7 +12,7 @@
 #      使う実装ミス(VTCFall時代のミス)を含む。GPU版は全サブパスの和で正規化している(電力保存)ので、
 #      CPU側でこの2関数だけ正しい実装に差し替えた場合と、元のままの場合の両方で比べる
 #  (a) 受信側MMSEの重みに入れている雑音(CPU版のH_effへの1.778e-6)の有無 (GPU版には無い)
-#  (b) 推定チャネルの雑音の大きさ: CPU版(1.778e-6) と GPU版相当(2.512e-6/sqrt(Pu/K)=3.553e-6)
+#  (b) 推定チャネルの雑音の大きさ: CPU版そのまま(1.778e-6) と GPU版の実効値(1.778e-6/sqrt(Pu/K)=2.51e-6)
 
 import sys
 import io
@@ -27,7 +27,7 @@ CPU_SCRIPT = REPO / "# 260319_RCS石垣島.py"
 Pt_mW, P_noise_mW, Pu_dBm, base_seed = 0.5, 6.31e-12, 30, 9
 U = 8
 SIGMA_CPU = 1.778e-6                  # CPU版 noise_dash_K_10 の実部・虚部それぞれの標準偏差
-SIGMA_GPU = 2.512e-6 / (0.5 ** 0.5)   # GPU版 sigma_dash (= 2.512e-6 / sqrt(Pu_mW/K))
+SIGMA_GPU = 1.778e-6 / (0.5 ** 0.5)   # GPU版の実効値 (= noise_std / sqrt(Pu_mW/K) = 2.51e-6)
 RX_ON, RX_OFF = "rx雑音あり", "rx雑音なし"
 
 
@@ -161,7 +161,7 @@ def main(npz_path, n_cases=6, seed=0):
         print(f"=== trial={trial} d={d}m Ssub={S}λ  (CPU {time.time() - t0:.0f}s) ===")
         print(f"  容量(多重) GPU {gc:8.3f} | CPU元のまま {r['orig','C','rxoff']:8.3f} (差 {gc - r['orig','C','rxoff']:+.3f})"
               f" | CPU SP_power修正 {r['fix','C','rxoff']:8.3f} (差 {gc - r['fix','C','rxoff']:+.3f})   ※受信側雑音なし")
-        print(f"  容量(多重) 〃       | CPU元のまま[rx雑音あり] {r['orig','C','rxon']:8.3f} | CPU修正[rx雑音あり] {r['fix','C','rxon']:8.3f}")
+        print(f"  容量(多重) 〃       | CPU元のまま[rx雑音あり] {r['orig','C','rxon']:8.3f} | CPU修正[rx雑音あり] {r['fix','C','rxon']:8.3f} (GPUとの差 {gc - r['fix','C','rxon']:+.3f})")
         print(f"  容量(単一) GPU {gc1:8.3f} | CPU元のまま {r['orig','C1','rxoff']:8.3f} (差 {gc1 - r['orig','C1','rxoff']:+.3f})"
               f" | CPU SP_power修正 {r['fix','C1','rxoff']:8.3f} (差 {gc1 - r['fix','C1','rxoff']:+.3f})")
         print(f"  レイヤ数 GPU {ly[di, si, trial, 0]:.3f} | CPU元 {r['orig','Ly','rxoff']:.3f} | CPU修正 {r['fix','Ly','rxoff']:.3f}"
