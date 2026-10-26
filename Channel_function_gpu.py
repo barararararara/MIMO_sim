@@ -21,7 +21,7 @@ class SystemConfig:
     f_GHz: torch.Tensor = field(default_factory=lambda: torch.linspace(141.50025, 142.49975, 2000))
     
     # 電力・雑音パラメータ
-    Pu_dBm: float = 30.0      # UEの送信電力(dBm)
+    Pu_dBm: float = 10.0      # UEの送信電力(dBm)
     Pt_mW: float = 1000/2000  # 基地局送信電力(mW/サブキャリア)
     P_noise_mW: float = 6.31e-12 # 雑音電力(mW)
     # 雑音の標準偏差(実部・虚部それぞれ) = sqrt(P_noise_mW/2)。チャネル推定雑音(パイロット)と、
@@ -790,7 +790,7 @@ def simulation_core_channelcalculation_gpu(base_batch, d, Ssub_lam, scenario, B,
         h_2k = torch.cat([h_est_corrected, h_rev], dim=-1)
         h_tau_2k = torch.fft.ifft(h_2k, dim=-1)
         h_tau_2k_masked = h_tau_2k.clone()
-        h_tau_2k_masked[..., L_idx : 2*K - L_idx] = 0  # 100ns以降をマスク
+        h_tau_2k_masked[..., L_idx : 2*K - L_idx] = 0  # 100〜1900nsをマスク(0〜100ns と 1900〜2000ns は残す)
         h_denoised = torch.fft.fft(h_tau_2k_masked, dim=-1)[..., :K]
         return h_denoised, h_est_raw
 
