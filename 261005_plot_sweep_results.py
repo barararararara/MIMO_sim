@@ -35,11 +35,13 @@ FONT_SETTINGS = {"fontname": "Times New Roman", "fontsize": LABEL_SIZE}
 
 # capacity の Type 軸: 0=true, 1=est_avg_denoised, 2=est_single_denoised, 3=est_single_raw
 TRUE, EST_AVG, EST_SINGLE, EST_RAW = 0, 1, 2, 3
+# ラベルは本文の表記に合わせる: NS = 雑音低減対策(10回同相加算 + 遅延領域ゼロマスキング)。
+# W/ NS (avg + mask) = 同相加算+ゼロマスキング、Mask only = ゼロマスキングのみ(単発)、W/o NS = どちらもなし。
 TYPE_STYLE = {
-    TRUE:       ("True",                     "k",       "-",  "o"),
-    EST_AVG:    ("Est. (10x avg + denoise)", "tab:blue", "--", "s"),
-    EST_SINGLE: ("Est. (single + denoise)",  "tab:orange", "-.", "^"),
-    EST_RAW:    ("Est. (single, raw)",       "tab:red", ":",  "v"),
+    TRUE:       ("True",                "k",       "-",  "o"),
+    EST_AVG:    ("W/ NS (avg + mask)",  "tab:blue", "--", "s"),
+    EST_SINGLE: ("Mask only",           "tab:orange", "-.", "^"),
+    EST_RAW:    ("W/o NS",              "tab:red", ":",  "v"),
 }
 MULTIPLEX, SINGLE_LAYER = 0, 1
 
@@ -136,7 +138,7 @@ def plot_layers(ly_mean, dv, sv, root, folder, t=TRUE, name="True Channel"):
     ax.set_ylim(0, 8.5)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     style_axes(ax)
-    style_legend(ax, title=r"$S_\mathrm{sub}$", legend_size=12)
+    style_legend(ax, title=r"$S_\mathrm{sub}$", legend_size=11, loc="lower center", ncol=3, columnspacing=1.2)
     save(fig, f"Number of Layers vs BS-UE Distance ({name})", root, folder)
 
 
@@ -255,17 +257,18 @@ def plot_wf_stacked(pr_mean, dv, sv, root, folder, n_show=6):
         save(fig, f"Water-filling Power Allocation vs Distance (True Channel, Ssub={s}lam)", root, folder)
 
 
-def plot_wf_stacked_row(pr_mean, dv, sv, root, folder, n_show=6):
-    """距離ごとの層別電力配分比率(真のチャネル、試行平均)の積み上げ棒を、Ssub=0/50/100λ で3つ横に並べた1枚にする。
-    縦軸・横軸を共通にして、Ssubによる違いを比較しやすくする。"""
+def plot_wf_stacked_row(pr_mean, dv, sv, root, folder, t=TRUE, name="True Channel", n_show=6):
+    """距離ごとの層別電力配分比率(試行平均)の積み上げ棒を、Ssub=0/50/100λ で3つ横に並べた1枚にする。
+    縦軸・横軸を共通にして、Ssubによる違いを比較しやすくする。t はチャネルの種類(TRUE / EST_AVG=W/ NS / EST_RAW=W/o NS)。
+    層の色は、n_show によらず層の番号で固定(最大8層)。"""
     cmap = plt.get_cmap("viridis")
     fig, axes = plt.subplots(1, len(sv), figsize=(4 * len(sv), 3), sharex=True, sharey=True, constrained_layout=True)
     for j, s in enumerate(sv):
         ax = axes[j]
         bottom = np.zeros(len(dv))
         for l in range(n_show):
-            v = pr_mean[:, j, TRUE, l]
-            ax.bar(dv, v, bottom=bottom, width=3.5, color=cmap(l / max(n_show - 1, 1)),
+            v = pr_mean[:, j, t, l]
+            ax.bar(dv, v, bottom=bottom, width=3.5, color=cmap(l / 7),
                    edgecolor="white", linewidth=0.4, label=f"Layer {l + 1}")
             bottom += v
         ax.set_title(fr"$S_\mathrm{{sub}}={s}\lambda$", fontsize=13)
@@ -274,8 +277,7 @@ def plot_wf_stacked_row(pr_mean, dv, sv, root, folder, n_show=6):
         style_axes(ax)
     axes[0].set_ylabel("Power Allocation Ratio", **FONT_SETTINGS)
     outside_legend(fig, axes[-1], ncol=n_show, legend_size=9)
-    # 3つ並べた1枚なので、各パネルのタイトルはそのまま残し、全体のタイトルはSlide版だけに付ける
-    save(fig, "Water-filling Power Allocation vs Distance (True Channel, Ssub Comparison)", root, folder)
+    save(fig, f"Water-filling Power Allocation vs Distance ({name}, Ssub Comparison)", root, folder)
 
 
 def plot_wf_by_type(pr_mean, dv, sv, root, folder, d_pick=(5, 25, 50), n_show=8):
@@ -367,6 +369,28 @@ def plot_layer_hist_multiface(ly, active_v, dv, sv, root, folder, d_pick=(5, 25,
         save(fig, f"Distribution of Number of Layers, 2+ Faces (d={d_val}m)", root, folder)
 
 
+def plot_layer_hist_by_faces(ly, active_v, root, folder, t=EST_RAW, name="W/o NS"):
+    """受信面数(V'=4:1面, 8:2面, 12:3面)ごとのレイヤ数の分布。全距離・全Ssubを合わせて集計する。
+    W/o NS では、V'ごとにレイヤ数がほぼ一定の値(4 / 5 / 6)に集まり、全体の平均はその重み付き平均になる。"""
+    cols = {4: "tab:green", 8: "tab:blue", 12: "tab:red"}
+    w = 0.27
+    x = np.arange(1, 9)
+    fig, ax = plt.subplots(figsize=(4, 3), constrained_layout=True)
+    for i, v in enumerate((4, 8, 12)):
+        m = active_v == v
+        cnt = np.bincount(np.round(ly[..., t][m]).astype(int), minlength=9)[1:9] / m.sum()
+        ax.bar(x + (i - 1) * w, cnt, width=w, color=cols[v],
+               label=fr"$V'={v}$ ({v // 4} face{'s' if v > 4 else ''}, {100 * m.mean():.0f}%)")
+    ax.set_xlabel("Number of Layers", **FONT_SETTINGS)
+    ax.set_ylabel("Fraction of Channels", **FONT_SETTINGS)
+    ax.set_xticks(x)
+    ax.set_ylim(0, 1.5)   # 上側に凡例用の余白(目盛りは1.0まで)
+    ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    style_axes(ax)
+    style_legend(ax, legend_size=8, loc="upper left")
+    save(fig, f"Distribution of Number of Layers by Number of Faces ({name})", root, folder)
+
+
 def main_multiface(npz_path, root):
     d = np.load(npz_path, allow_pickle=True)
     ly = d["layers"][:, :, :, TRUE]
@@ -391,11 +415,17 @@ def main(npz_path, root):
 
     plot_capacity(cap_mean, dv, sv, root, folder)
     plot_layers(ly_mean, dv, sv, root, folder, TRUE, "True Channel")
+    plot_layers(ly_mean, dv, sv, root, folder, EST_AVG, "Estimated Channel W/ NS")
     plot_layers(ly_mean, dv, sv, root, folder, EST_RAW, "Estimated Channel W/o NS")
+    plot_layer_hist_by_faces(ly, d["active_v"], root, folder)
     plot_capacity_by_type(cap_mean, dv, sv, root, folder)
     plot_capacity_loss(cap_mean, dv, sv, root, folder)
     plot_eig_cdf(eig, dv, sv, root, folder)
     plot_wf_stacked(pr_mean, dv, sv, root, folder)
+    # Ssub=0/50/100λ を横に並べた版(True / W/ NS / W/o NS)
+    plot_wf_stacked_row(pr_mean, dv, sv, root, folder, TRUE, "True Channel", n_show=6)
+    plot_wf_stacked_row(pr_mean, dv, sv, root, folder, EST_AVG, "Estimated Channel W/ NS", n_show=6)
+    plot_wf_stacked_row(pr_mean, dv, sv, root, folder, EST_RAW, "Estimated Channel W/o NS", n_show=8)
     plot_wf_by_type(pr_mean, dv, sv, root, folder)
 
 
